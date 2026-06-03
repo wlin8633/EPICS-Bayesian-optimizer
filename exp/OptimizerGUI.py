@@ -58,6 +58,7 @@ class OptimizerGUI:
         self.analysis_folder_var = tk.StringVar()
         self.output_extraction_func_var = tk.StringVar()
         self.prerequisite_func_var = tk.StringVar()
+        self.post_recording_func_var = tk.StringVar()
         self.file_pattern_var = tk.StringVar()
         self.autoupload_status_var = tk.StringVar(value="Status: Idle")
         self.autoupload_thread = None
@@ -121,6 +122,9 @@ class OptimizerGUI:
         
         tk.Label(autoupload_frame, text="Prerequisite Func:").grid(row=2, column=0, sticky=tk.W, pady=2)
         tk.Entry(autoupload_frame, textvariable=self.prerequisite_func_var, width=40).grid(row=2, column=1, sticky=tk.W)
+        
+        tk.Label(autoupload_frame, text="Post-Recording Func:").grid(row=3, column=0, sticky=tk.W, pady=2)
+        tk.Entry(autoupload_frame, textvariable=self.post_recording_func_var, width=40).grid(row=3, column=1, sticky=tk.W)
 
         autoupload_button_frame = tk.Frame(autoupload_frame)
         self.start_autoupload_button = tk.Button(autoupload_button_frame, text="Start Auto-Upload", command=self.start_autoupload)
@@ -128,9 +132,9 @@ class OptimizerGUI:
         self.stop_autoupload_button = tk.Button(autoupload_button_frame, text="Stop Auto-Upload", command=self.stop_autoupload, state=tk.DISABLED)
         self.stop_autoupload_button.pack(side=tk.LEFT, padx=5)
         tk.Checkbutton(autoupload_button_frame, text="Auto-Optimization Loop", variable=self.auto_optimize_var).pack(side=tk.LEFT, padx=10)
-        autoupload_button_frame.grid(row=3, column=0, columnspan=4, pady=5)
+        autoupload_button_frame.grid(row=4, column=0, columnspan=4, pady=5)
         
-        tk.Label(autoupload_frame, textvariable=self.autoupload_status_var).grid(row=4, column=0, columnspan=4, sticky=tk.W, pady=2)
+        tk.Label(autoupload_frame, textvariable=self.autoupload_status_var).grid(row=5, column=0, columnspan=4, sticky=tk.W, pady=2)
 
 
         # --- Action Buttons ---
@@ -207,6 +211,7 @@ class OptimizerGUI:
             "analysis_folder": "",
             "output_extraction_func_file": "sim_user_defined_function.py",
             "prerequisite_func_file": "",
+            "post_recording_func_file": "",
             "file_pattern": "*_tp_analysis.npz"
         }
         try:
@@ -235,6 +240,7 @@ class OptimizerGUI:
         self.analysis_folder_var.set(state.get("analysis_folder", default_state["analysis_folder"]))
         self.output_extraction_func_var.set(state.get("output_extraction_func_file", default_state["output_extraction_func_file"]))
         self.prerequisite_func_var.set(state.get("prerequisite_func_file", default_state["prerequisite_func_file"]))
+        self.post_recording_func_var.set(state.get("post_recording_func_file", default_state.get("post_recording_func_file", "")))
         self.file_pattern_var.set(state.get("file_pattern", default_state["file_pattern"]))
         self.auto_optimize_var.set(state.get("auto_optimize", False))
         self.append_to_sheet_var.set(state.get("append_to_sheet", True))
@@ -259,6 +265,7 @@ class OptimizerGUI:
             "analysis_folder": self.analysis_folder_var.get(),
             "output_extraction_func_file": self.output_extraction_func_var.get(),
             "prerequisite_func_file": self.prerequisite_func_var.get(),
+            "post_recording_func_file": self.post_recording_func_var.get(),
             "file_pattern": self.file_pattern_var.get(),
             "auto_optimize": self.auto_optimize_var.get(),
             "append_to_sheet": self.append_to_sheet_var.get(),
@@ -421,6 +428,13 @@ class OptimizerGUI:
                             shot_num = results.pop('shot_number')
                             aff.update_sheet_with_analysis(worksheet, shot_col_name, shot_num, results)
                             self.autoupload_status_var.set(f"Status: Uploaded results for shot {shot_num}.")
+
+                            # --- NEW: Execute Post-Recording Function ---
+                            post_rec_file = self.post_recording_func_var.get()
+                            if post_rec_file:
+                                self.autoupload_status_var.set(f"Status: Executing post-recording function for shot {shot_num}...")
+                                # Using auto_mode=True to prevent message boxes from stalling the loop
+                                self._execute_user_function(post_rec_file, "run_post_recording", auto_mode=True)
 
                             # --- NEW: Trigger auto-optimization ---
                             if self.auto_optimize_var.get():

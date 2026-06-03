@@ -519,6 +519,7 @@ class TPAnalyzerWindow:
             for k in ["pixel_size", "zero_width", "Bz", "lB", "dB", "Ez", "lE", "dE", "minE", "maxE"]: config[k] = float(config[k])
             
             config["zero_pt"] = self.monitor_window.get_zero_point()
+
             roi_bbox = self.monitor_window.get_roi_bbox()
             if config["zero_pt"] is None or roi_bbox is None:
                 raise ValueError("Zero Point or ROI not set in Image Monitor.")
@@ -606,6 +607,8 @@ class TPAnalyzerWindow:
             config["is_gaussian_filter"] = config["is_gaussian_filter"].lower() in ['true', '1', 't', 'y', 'yes']
             config["filePath"] = self.path_var.get()
             config["zero_pt"] = self.monitor_window.get_zero_point()
+            config["roi_bbox"] = self.monitor_window.get_roi_bbox()
+            config["bg_bbox"] = self.monitor_window.get_bg_bbox()
             
             tp_count_roi = self.last_tp_count_roi
             mean_spectrum = np.sum(tp_count_roi, axis=0)

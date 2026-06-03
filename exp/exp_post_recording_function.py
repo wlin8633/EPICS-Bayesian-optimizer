@@ -2,12 +2,14 @@
 import time
 from ophyd.signal import EpicsSignalRO, EpicsSignal
 from ophyd import EpicsMotor, Component
+import random
 
 # %%
 
-def run_prerequisites():
+def run_post_recording():
     PVs = {
-        "Power": "Station03:Relay1:OnOff",
+        "p1": "Station03:GPP3323:Ch2:Vset",
+        "p2": "Station03:GPP3323:Ch2:Iset",
     }
 
     print("Connecting to EPICS PVs...")
@@ -21,7 +23,9 @@ def run_prerequisites():
             print(f"Failed to connect to PV: {PV_name} ({PV_val})")
 
     # if power is off, turn it on
-    if Power.get() == 0:
-        Power.put(1)
-        time.sleep(10)
+    # if Power.get() == 0:
+    #     Power.put(1)
+    #     time.sleep(10)
+    p1.put(random.uniform(0, 1))
+    p2.put(random.uniform(0, 1))
     return

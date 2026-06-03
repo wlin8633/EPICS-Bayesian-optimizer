@@ -197,6 +197,9 @@ class MonitorWindow:
     def get_roi_bbox(self):
         return self.roi_bbox
 
+    def get_bg_bbox(self):
+        return self.bg_bbox
+
     def _setup_widgets(self):
         # --- Main Frames ---
         top_frame = ttk.Frame(self.window, padding="10")
