@@ -1,0 +1,20 @@
+# 科學運算與圖表
+numpy
+pandas
+scipy
+matplotlib
+
+# 貝氏最佳化核心
+scikit-optimize
+
+# EPICS 控制
+ophyd
+pyepics
+
+# 影像處理 (ImageMonitor)
+Pillow
+
+# Google Sheets API (AutoFireFunc)
+gspread
+google-auth
+google-auth-oauthlib
