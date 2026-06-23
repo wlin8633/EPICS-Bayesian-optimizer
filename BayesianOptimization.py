@@ -88,7 +88,15 @@ def suggest_next_params_bo(
         return _local_perturb(best_x, inputNames, frac=local_frac)
 
     # phase == "bayes"
-    history_x = df_cleaned[keys].to_numpy().tolist()
+    history_x_arr = df_cleaned[keys].to_numpy(dtype=float)
+    
+    # Clip history_x to exactly within the bounds to prevent skopt errors
+    # (e.g., due to floating point precision or manually entered spreadsheet data)
+    for i, k in enumerate(keys):
+        lo, hi = inputNames[k]
+        history_x_arr[:, i] = np.clip(history_x_arr[:, i], lo, hi)
+        
+    history_x = history_x_arr.tolist()
     history_obj = df_cleaned[optName].to_numpy().tolist()
     history_y = _objective_to_skopt_y(history_obj, optType)
 
