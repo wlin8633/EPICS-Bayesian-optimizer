@@ -1,20 +1,18 @@
-# 科學運算與圖表
+# Scientific computing and plotting
 numpy
-pandas
 scipy
+pandas
 matplotlib
 
-# 貝氏最佳化核心
-scikit-optimize
+# Bayesian Optimization Core
+botorch
+gpytorch
 
-# EPICS 控制
+# EPICS Control
 ophyd
-pyepics
+caproto
 
-# 影像處理 (ImageMonitor)
-Pillow
-
-# Google Sheets API (AutoFireFunc)
-gspread
-google-auth
-google-auth-oauthlib
+# Image Processing (ImageMonitor)
+pillow
+opencv-python
+scikit-image
