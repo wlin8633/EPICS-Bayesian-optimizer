@@ -119,9 +119,9 @@ Use this for continuous, unattended data processing.
 
 ### Defining the Optimization Problem
 
-1.  **`Input Cols`**: A comma-separated list of the column names in your sheet that represent the machine parameters you are tuning (e.g., `"TargetX", "TargetY"`).
-2.  **`Input Bounds`**: The allowed range for each input parameter, written as a comma-separated list of tuples. The order must match the `Input Cols`. Example: `(10.5, 11.5), (13.0, 14.0)`.
-3.  **`Output Cols`**: A comma-separated list of the column names that represent the results from your analysis (e.g., `sum_spe_ene`).
+1.  **`Action Vars (name: (min, max))`**: A comma-separated list of the machine parameters you are actively tuning, combined with their allowed ranges. Example: `x1: (10, 12), x2: (0, 5)`.
+2.  **`Context Vars (name: (min, max))`**: A comma-separated list of uncontrollable but measurable parameters (e.g., prepulse, temperature drift), combined with their expected ranges. The BO model will learn how these affect the output to "explain away" the noise. Leave blank if standard BO is desired. Example: `x6: (0.001, 0.01), x7: (50, 150)`.
+3.  **`Output Cols (comma-sep)`**: A comma-separated list of the column names that represent the results from your analysis (e.g., `sum_spe_ene`).
 4.  **`Objective`**:
     -   **Name:** The name for the final objective value that the script will calculate and try to optimize (e.g., `obj`).
     -   **Type:** `max` if you want to maximize the objective, `min` if you want to minimize it.
@@ -131,12 +131,14 @@ Use this for continuous, unattended data processing.
 
 1.  **Select Phase:**
     -   `Random`: Explores the parameter space randomly. Good for starting out.
-    -   `Bayes`: The main optimization mode. Uses the model to make intelligent suggestions.
+    -   `Bayes`: The main optimization mode using the BoTorch engine.
     -   `Local`: Fine-tunes the search around the best point found so far.
-2.  **Get Suggestion:** Click **"Update and Suggest"**. The GUI will:
-    -   Fetch the latest data from the Google Sheet.
-    -   Calculate the objective for all historical points.
-    -   Run the optimizer.
+2.  **Contextual BO Modes:**
+    -   **Unknown Context (Robust Mode):** If you cannot measure the context *before* the next shot fires, just run the optimizer as usual. The engine will perform Monte Carlo integration over the historical context distribution and suggest the most "robust" Action parameters.
+    -   **Known Context (Active Mode):** If you can measure the context (e.g., via a prepulse monitor) before firing, ensure that your diagnostic automatically pushes a new row to Google Sheets containing ONLY the context values and shot number. When you click **"Update and Suggest"**, the GUI will automatically detect this pending row, read the known context, and actively suggest Action parameters tailored to compensate for that exact state!
+3.  **Get Suggestion:** Click **"Update and Suggest"**. The GUI will:
+    -   Fetch the latest data (including Actions, Contexts, and Objectives) from Google Sheets.
+    -   Run the optimizer (standard or contextual).
     -   Display the **"Next Suggested Params"** and the **"Current Best"** found so far.
 3.  **Apply and Record:**
     -   Click **"Append Suggestion to Sheet"**. A confirmation box will appear, showing you which EPICS PVs will be updated.
