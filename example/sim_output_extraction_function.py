@@ -72,7 +72,7 @@ def process_analysis_file(file_path):
 #     import numpy as np
 #     import matplotlib.pyplot as plt
 #     # %%
-#     ds = np.load(r"\\192.168.1.98\Station03\Experiments\LPAExp\2025-11\ICCD_image\optapp_20260127\tpanalyzer\sbgtest_379_tp_analysis.npz", allow_pickle=True)
+#     ds = np.load(r"C:\path\to\your\test_analysis.npz", allow_pickle=True)
 #     ds.files
 
 #     # %% plot the mean spectrum

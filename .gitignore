@@ -5,3 +5,5 @@ dist/
 *.spec
 *.json
 *.csv
+gsheet_config.json
+

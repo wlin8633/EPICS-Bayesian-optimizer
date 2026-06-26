@@ -171,11 +171,27 @@ class OptimizerGUI:
             self.tp_analyzer_window.lift()
 
     def load_state(self):
+        # Read from gsheet_config.json if available
+        import os, json
+        config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'gsheet_config.json')
+        try:
+            with open(config_path, 'r') as f:
+                cfg = json.load(f)
+            c_path = cfg.get("cred_path", r"C:\path\to\credentials.json")
+            t_path = cfg.get("token_path", r"C:\path\to\token.json")
+            s_url = cfg.get("spreadsheet_url", "https://docs.google.com/spreadsheets/d/YOUR_DOCUMENT_ID/edit")
+            s_sheet = cfg.get("worksheet_name", "test")
+        except:
+            c_path = r"C:\path\to\credentials.json"
+            t_path = r"C:\path\to\token.json"
+            s_url = "https://docs.google.com/spreadsheets/d/YOUR_DOCUMENT_ID/edit"
+            s_sheet = "test"
+
         default_state = {
-            "cred_path": r"\\192.168.1.98\Station03\Experiments\LPAExp\2025-11\gspread\credentials.json",
-            "token_path": r"\\192.168.1.98\Station03\Experiments\LPAExp\2025-11\gspread\token.json",
-            "url": "https://docs.google.com/spreadsheets/d/13snuoQheoQKrdmM65oYAxr4Q89IioV4aYynih7G6jhQ/edit",
-            "sheet": "test",
+            "cred_path": c_path,
+            "token_path": t_path,
+            "url": s_url,
+            "sheet": s_sheet,
             "shot_num_col": "Shot",
             "actions_config": 'x1: (10, 12), x2: (0, 5), x3: (0, 1), x4: (-3, 3), x5: (100, 200)',
             "contexts_config": 'x6: (0.001, 0.01), x7: (50, 150)',

@@ -11,11 +11,20 @@ import time
 
 # %% # ----> Prequisite settings
 # spreadsheet settings
-cred_path  = r"\\192.168.1.98\Station03\Experiments\LPAExp\2025-11\gspread\credentials.json"
-token_path = r"\\192.168.1.98\Station03\Experiments\LPAExp\2025-11\gspread\token.json"
-spreadsheet_url = "https://docs.google.com/spreadsheets/d/13snuoQheoQKrdmM65oYAxr4Q89IioV4aYynih7G6jhQ/edit"
-# worksheet name
-ws_name = "test"
+import json
+config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'gsheet_config.json')
+try:
+    with open(config_path, 'r') as f:
+        cfg = json.load(f)
+    cred_path = cfg.get("cred_path", r"C:\path\to\credentials.json")
+    token_path = cfg.get("token_path", r"C:\path\to\token.json")
+    spreadsheet_url = cfg.get("spreadsheet_url", "https://docs.google.com/spreadsheets/d/YOUR_DOCUMENT_ID/edit")
+    ws_name = cfg.get("worksheet_name", "test")
+except:
+    cred_path = r"C:\path\to\credentials.json"
+    token_path = r"C:\path\to\token.json"
+    spreadsheet_url = "https://docs.google.com/spreadsheets/d/YOUR_DOCUMENT_ID/edit"
+    ws_name = "test"
 
 
 # %%
