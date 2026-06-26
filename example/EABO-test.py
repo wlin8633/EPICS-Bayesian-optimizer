@@ -30,8 +30,8 @@ def run_test(use_context=True):
 
     objective_col = "obj"
 
-    # 2. Generate Initial Random Data (15 shots)
-    initial_samples = 15
+    # 2. Generate Initial Random Data (30 shots)
+    initial_samples = 30
     data = []
     for i in range(initial_samples):
         x = [random.uniform(input_bounds[k][0], input_bounds[k][1]) for k in input_bounds.keys()]
@@ -43,7 +43,7 @@ def run_test(use_context=True):
     df = pd.DataFrame(data)
 
     # 4. Run Optimization Loop
-    bo_iterations = 100
+    bo_iterations = 200
     for i in range(bo_iterations):
         # The environment ALWAYS has random context x6, x7
         env_x6 = random.uniform(input_bounds["x6"][0], input_bounds["x6"][1])
