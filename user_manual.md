@@ -133,12 +133,12 @@ Use this for continuous, unattended data processing.
     -   `Random`: Explores the parameter space randomly. Good for starting out.
     -   `Bayes`: The main optimization mode using the BoTorch engine.
     -   `Local`: Fine-tunes the search around the best point found so far.
-2.  **Contextual BO Modes:**
+2.  **Environment-Aware BO Modes:**
     -   **Unknown Context (Robust Mode):** If you cannot measure the context *before* the next shot fires, just run the optimizer as usual. The engine will perform Monte Carlo integration over the historical context distribution and suggest the most "robust" Action parameters.
     -   **Known Context (Active Mode):** If you can measure the context (e.g., via a prepulse monitor) before firing, ensure that your diagnostic automatically pushes a new row to Google Sheets containing ONLY the context values and shot number. When you click **"Update and Suggest"**, the GUI will automatically detect this pending row, read the known context, and actively suggest Action parameters tailored to compensate for that exact state!
 3.  **Get Suggestion:** Click **"Update and Suggest"**. The GUI will:
     -   Fetch the latest data (including Actions, Contexts, and Objectives) from Google Sheets.
-    -   Run the optimizer (standard or contextual).
+    -   Run the optimizer (standard or environment-aware).
     -   Display the **"Next Suggested Params"** and the **"Current Best"** found so far.
 3.  **Apply and Record:**
     -   Click **"Append Suggestion to Sheet"**. A confirmation box will appear, showing you which EPICS PVs will be updated.

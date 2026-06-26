@@ -86,7 +86,7 @@ def _get_norm_dist(x):
     dynamic_target[0] = TARGET[0] + (c1_norm * drift_amplitude * x1_range)
     dynamic_target[1] = TARGET[1] + (c2_norm * drift_amplitude * x2_range)
 
-    # CRITICAL: To allow CBO to fully recover the yield, the environment variables (x6, x7)
+    # CRITICAL: To allow EA-BO to fully recover the yield, the environment variables (x6, x7)
     # should NOT penalize the distance directly. They only act as shift parameters!
     dynamic_target[5] = x_arr[5]
     dynamic_target[6] = x_arr[6]

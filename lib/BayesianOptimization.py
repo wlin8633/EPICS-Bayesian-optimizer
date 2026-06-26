@@ -138,7 +138,7 @@ def suggest_next_params_bo(
     mll = ExactMarginalLogLikelihood(gp.likelihood, gp)
     fit_gpytorch_mll(mll)
     
-    # 4. Contextual BO Logic
+    # 4. Environment-Aware BO Logic
     best_f = train_Y.max()
     EI = LogExpectedImprovement(gp, best_f=best_f, maximize=True)
     
@@ -150,7 +150,7 @@ def suggest_next_params_bo(
         return candidate.squeeze(0).tolist()
     
     else:
-        # --- Contextual BO ---
+        # --- Environment-Aware BO ---
         from botorch.acquisition import FixedFeatureAcquisitionFunction
         
         # Determine indices

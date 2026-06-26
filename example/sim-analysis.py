@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # Set file path (fill in the name of the CSV downloaded after simulation)
-CSV_PATH = os.path.join(os.path.dirname(__file__), 'CBO.csv')
+CSV_PATH = os.path.join(os.path.dirname(__file__), 'EABO.csv')
 
 # Load data (based on previous preview, the file seems to be tab-separated)
 # If loading fails, change sep='\t' to sep=','
