@@ -43,7 +43,7 @@ def run_test(use_context=True):
     df = pd.DataFrame(data)
 
     # 4. Run Optimization Loop
-    bo_iterations = 200
+    bo_iterations = 100
     for i in range(bo_iterations):
         # The environment ALWAYS has random context x6, x7
         env_x6 = random.uniform(input_bounds["x6"][0], input_bounds["x6"][1])
@@ -139,13 +139,21 @@ if __name__ == "__main__":
     axes[1, 0].set_title("Yield Convergence Comparison")
     axes[1, 0].legend()
 
-    # --- Plot 4: Scatter of Objectives ---
-    axes[1, 1].scatter(df_eabo.index, df_eabo["obj"], label="Environment-Aware BO", alpha=0.6, color='blue')
-    axes[1, 1].scatter(df_trad.index, df_trad["obj"], label="Traditional BO", alpha=0.6, color='orange')
+    # --- Plot 4: Optimization Trace (Current Best) ---
+    df_eabo['best_obj'] = df_eabo["obj"].cummax()
+    df_trad['best_obj'] = df_trad["obj"].cummax()
+
+    axes[1, 1].plot(df_eabo.index, df_eabo['best_obj'], label="EA-BO Best $f^+$", color='blue', linewidth=2)
+    axes[1, 1].plot(df_trad.index, df_trad['best_obj'], label="Trad BO Best $f^+$", color='orange', linewidth=2)
+    
+    # Keep the raw scatter in the background for reference
+    axes[1, 1].scatter(df_eabo.index, df_eabo["obj"], alpha=0.2, color='blue', s=15)
+    axes[1, 1].scatter(df_trad.index, df_trad["obj"], alpha=0.2, color='orange', s=15)
+
     axes[1, 1].axvline(15, color='gray', linestyle='--')
-    axes[1, 1].set_xlabel("Shot Number")
-    axes[1, 1].set_ylabel("Raw Objective Value")
-    axes[1, 1].set_title("Raw Yield Stability")
+    axes[1, 1].set_xlabel("Shot Number (Iteration)")
+    axes[1, 1].set_ylabel("Objective Value")
+    axes[1, 1].set_title("Optimization Trace (Current Best)")
     axes[1, 1].legend()
 
     plt.tight_layout()
