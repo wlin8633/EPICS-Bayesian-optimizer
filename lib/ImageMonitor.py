@@ -78,13 +78,28 @@ class MonitorWindow:
             self.toolbar.children['!button3'].config(state=tk.NORMAL)
         print(f"Edit mode {'enabled' if self.edit_mode else 'disabled'}.")
 
+    def _safe_remove_artist(self, artist):
+        if artist is None:
+            return
+        try:
+            artist.remove()
+        except (ValueError, AttributeError, NotImplementedError):
+            try:
+                if artist in self.ax.lines:
+                    self.ax.lines.remove(artist)
+                elif artist in self.ax.patches:
+                    self.ax.patches.remove(artist)
+            except Exception:
+                pass
+
     def on_canvas_click(self, event):
         if self.edit_mode and event.inaxes == self.ax:
             self.start_x = event.xdata
             self.start_y = event.ydata
             
             if self.drag_rect_artist:
-                self.drag_rect_artist.remove()
+                self._safe_remove_artist(self.drag_rect_artist)
+                self.drag_rect_artist = None
             self.drag_rect_artist = self.ax.add_patch(
                 patches.Rectangle((self.start_x, self.start_y), 0, 0, fill=False, color='lime', linestyle='--', linewidth=1)
             )
@@ -113,7 +128,7 @@ class MonitorWindow:
     def on_canvas_release(self, event):
         if self.edit_mode and self.start_x is not None:
             if self.drag_rect_artist:
-                self.drag_rect_artist.remove()
+                self._safe_remove_artist(self.drag_rect_artist)
                 self.drag_rect_artist = None
 
             end_x = event.xdata
@@ -151,22 +166,13 @@ class MonitorWindow:
     def draw_overlays(self):
         # Delete previous drawings
         if self.zero_pt_artist:
-            try:
-                self.zero_pt_artist.remove()
-            except (ValueError, AttributeError):  # Handle cases where artist is already gone
-                pass
+            self._safe_remove_artist(self.zero_pt_artist)
             self.zero_pt_artist = None
         if self.roi_rect_artist:
-            try:
-                self.roi_rect_artist.remove()
-            except (ValueError, AttributeError):
-                pass
+            self._safe_remove_artist(self.roi_rect_artist)
             self.roi_rect_artist = None
         if self.bg_bbox_artist:
-            try:
-                self.bg_bbox_artist.remove()
-            except (ValueError, AttributeError):
-                pass
+            self._safe_remove_artist(self.bg_bbox_artist)
             self.bg_bbox_artist = None
 
         # Draw new ones if the image is present
@@ -491,6 +497,13 @@ class MonitorWindow:
 
     def update_colormap(self):
         if self.last_img_array is None:
+            resolved = self._resolve_path(self.path_var.get())
+            if resolved and os.path.isfile(resolved):
+                try:
+                    img = np.array(Image.open(resolved))
+                    self.update_plot(img, os.path.basename(resolved), resolved)
+                except Exception as e:
+                    messagebox.showerror("Error", f"Failed to load image file: {e}")
             return
 
         processed_img = self.last_img_array.copy()
@@ -538,27 +551,41 @@ class MonitorWindow:
                 messagebox.showwarning("Background Subtraction Error", f"An error occurred during background subtraction: {e}")
 
         if self.colorbar:
-            self.colorbar.remove()
+            try:
+                self.colorbar.remove()
+            except (ValueError, AttributeError, NotImplementedError, KeyError):
+                pass
             self.colorbar = None
 
         self.ax.clear()
-        self.image_on_canvas = self.ax.imshow(processed_img, cmap='viridis', aspect='equal', origin='upper')
-        self.ax.set_title(self.last_filename)
-        
-        self.colorbar = self.fig.colorbar(self.image_on_canvas, ax=self.ax)
+        self.zero_pt_artist = None
+        self.roi_rect_artist = None
+        self.bg_bbox_artist = None
+        self.drag_rect_artist = None
 
+        new_vmin = None
+        new_vmax = None
         try:
-            vmin = self.vmin_var.get()
-            vmax = self.vmax_var.get()
-            
+            vmin = self.vmin_var.get().strip()
+            vmax = self.vmax_var.get().strip()
             new_vmin = float(vmin) if vmin else None
             new_vmax = float(vmax) if vmax else None
-            
-            self.image_on_canvas.set_clim(vmin=new_vmin, vmax=new_vmax)
         except ValueError:
             messagebox.showwarning("Input Error", "VMin/VMax must be numbers.")
+            new_vmin, new_vmax = None, None
+
+        try:
+            self.image_on_canvas = self.ax.imshow(
+                processed_img, cmap='viridis', aspect='equal', origin='upper',
+                vmin=new_vmin, vmax=new_vmax
+            )
+            self.ax.set_title(self.last_filename)
+            self.colorbar = self.fig.colorbar(self.image_on_canvas, ax=self.ax)
         except Exception as e:
             messagebox.showerror("Error", f"Failed to update colormap: {e}")
+            self.image_on_canvas = self.ax.imshow(processed_img, cmap='viridis', aspect='equal', origin='upper')
+            self.ax.set_title(self.last_filename)
+            self.colorbar = self.fig.colorbar(self.image_on_canvas, ax=self.ax)
 
         self.draw_overlays()
         self.canvas.draw()
