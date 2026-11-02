@@ -7,7 +7,7 @@ from queue import Queue, Empty
 from PIL import Image, ImageTk
 import numpy as np
 import json
-
+import pathlib
 import matplotlib.patches as patches
 
 from matplotlib.figure import Figure
@@ -15,18 +15,21 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolb
 
 
 class MonitorWindow:
-    def __init__(self, master):
+    def __init__(self, master, dynamic_bg_subtraction_var=None):
         self.master = master
         self.window = tk.Toplevel(master)
         self.window.title("Image Monitor")
         self.window.geometry("800x750")
 
+        self.dynamic_bg_subtraction_var = dynamic_bg_subtraction_var
+
+        self.script_dir = pathlib.Path(__file__).parent
         self.image_queue = Queue()
         self.monitoring_thread = None
         self.stop_event = threading.Event()
         self.last_file_path = None
         self.background_image = None
-        self.bg_factor = 1.0 # New: Background scaling factor
+        self.bg_factor = 1.0  # Background scaling factor
         self.state_file = "monitor_state.json"
         self.last_img_array = None
         self.last_filename = None
@@ -35,12 +38,14 @@ class MonitorWindow:
         self.edit_mode = False
         self.zero_pt = None
         self.roi_bbox = None
+        self.bg_bbox = None
         self.start_x = None
         self.start_y = None
         self.original_title = "Image Monitor"
         self.roi_rect_artist = None
         self.zero_pt_artist = None
         self.drag_rect_artist = None
+        self.bg_bbox_artist = None
 
         self._setup_widgets()
         self.load_state()
@@ -50,11 +55,18 @@ class MonitorWindow:
         self.window.protocol("WM_DELETE_WINDOW", self.on_closing)
         self.window.bind("<Control-e>", self.toggle_edit_mode)
 
+    def _resolve_path(self, path_str):
+        if not path_str or os.path.isabs(path_str):
+            return path_str
+        if os.path.exists(path_str):
+            return os.path.abspath(path_str)
+        return str(self.script_dir / path_str)
+
     def toggle_edit_mode(self, event=None):
         self.edit_mode = not self.edit_mode
         if self.edit_mode:
             self.window.title(f"{self.original_title} - EDIT MODE (Ctrl+E to exit)")
-            self.toolbar.set_message("EDIT MODE: Left-click to set zero point, drag to set ROI.")
+            self.toolbar.set_message("EDIT MODE: Left-click for zero pt, drag for ROI, Shift+drag for BG ROI.")
             # Disable matplotlib's default pan/zoom bindings
             self.toolbar.children['!button2'].config(state=tk.DISABLED)
             self.toolbar.children['!button3'].config(state=tk.DISABLED)
@@ -79,7 +91,11 @@ class MonitorWindow:
             self.canvas.draw()
 
     def on_canvas_drag(self, event):
-        if self.edit_mode and event.inaxes == self.ax and self.start_x is not None:
+        if self.edit_mode and event.inaxes == self.ax and self.start_x is not None and self.drag_rect_artist:
+            # Check if event.xdata or event.ydata is None
+            if event.xdata is None or event.ydata is None:
+                return
+
             width = event.xdata - self.start_x
             height = event.ydata - self.start_y
             
@@ -103,25 +119,30 @@ class MonitorWindow:
             end_x = event.xdata
             end_y = event.ydata
 
-            if end_x is None or end_y is None: # Released outside of axes
+            if end_x is None or end_y is None:  # Released outside of axes
                 self.start_x, self.start_y = None, None
                 self.canvas.draw()
                 return
 
             # Check if it was a click (very short drag)
-            # Use a threshold based on pixels on screen to be robust against zoom
-            display_dx = abs(event.x - self.canvas.get_tk_widget().winfo_pointerx())
-            display_dy = abs(event.y - self.canvas.get_tk_widget().winfo_pointery())
-
             if abs(self.start_x - end_x) < 5 and abs(self.start_y - end_y) < 5:
                 self.zero_pt = (int(self.start_x), int(self.start_y))
                 print(f"Zero point set to: {self.zero_pt}")
-            else: # It was a drag, so set bbox
-                self.roi_bbox = (
+            else:  # It was a drag, so set bbox
+                # Check if Shift key was held
+                is_shift_pressed = 'shift' in event.modifiers
+
+                bbox = (
                     int(min(self.start_x, end_x)), int(min(self.start_y, end_y)),
                     int(max(self.start_x, end_x)), int(max(self.start_y, end_y))
                 )
-                print(f"ROI bbox set to: {self.roi_bbox}")
+
+                if is_shift_pressed:
+                    self.bg_bbox = bbox
+                    print(f"Background ROI bbox set to: {self.bg_bbox}")
+                else:
+                    self.roi_bbox = bbox
+                    print(f"ROI bbox set to: {self.roi_bbox}")
 
             self.start_x, self.start_y = None, None
             self.draw_overlays()
@@ -132,7 +153,7 @@ class MonitorWindow:
         if self.zero_pt_artist:
             try:
                 self.zero_pt_artist.remove()
-            except (ValueError, AttributeError): # Handle cases where artist is already gone
+            except (ValueError, AttributeError):  # Handle cases where artist is already gone
                 pass
             self.zero_pt_artist = None
         if self.roi_rect_artist:
@@ -141,6 +162,12 @@ class MonitorWindow:
             except (ValueError, AttributeError):
                 pass
             self.roi_rect_artist = None
+        if self.bg_bbox_artist:
+            try:
+                self.bg_bbox_artist.remove()
+            except (ValueError, AttributeError):
+                pass
+            self.bg_bbox_artist = None
 
         # Draw new ones if the image is present
         if self.image_on_canvas:
@@ -154,12 +181,22 @@ class MonitorWindow:
                 self.roi_rect_artist = self.ax.add_patch(
                     patches.Rectangle((x_min, y_min), width, height, fill=False, color='red', linewidth=2)
                 )
+            if self.bg_bbox:
+                x_min, y_min, x_max, y_max = self.bg_bbox
+                width = x_max - x_min
+                height = y_max - y_min
+                self.bg_bbox_artist = self.ax.add_patch(
+                    patches.Rectangle((x_min, y_min), width, height, fill=False, color='blue', linestyle='--', linewidth=2)
+                )
 
     def get_zero_point(self):
         return self.zero_pt
 
     def get_roi_bbox(self):
         return self.roi_bbox
+
+    def get_bg_bbox(self):
+        return self.bg_bbox
 
     def _setup_widgets(self):
         # --- Main Frames ---
@@ -181,8 +218,8 @@ class MonitorWindow:
         
         browse_folder_button = ttk.Button(top_frame, text="Select Folder...", command=self._browse_folder)
         browse_folder_button.grid(row=0, column=2, padx=2)
-        browse_file_button = ttk.Button(top_frame, text="Select File...", command=self._browse_file)
-        browse_file_button.grid(row=0, column=3, padx=2)
+        browse_batch_button = ttk.Button(top_frame, text="Load File(s)...", command=self._browse_batch_files)
+        browse_batch_button.grid(row=0, column=3, padx=2)
 
         # Sleep Time
         ttk.Label(top_frame, text="Sleep (s):").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
@@ -267,25 +304,30 @@ class MonitorWindow:
             self.start_button.config(state=tk.NORMAL)
             self.stop_button.config(state=tk.DISABLED)
 
-    def _browse_file(self):
-        file_path = filedialog.askopenfilename(
-            title="Select a single image file",
+    def _browse_batch_files(self):
+        files = filedialog.askopenfilenames(
+            title="Select one or more image files to display",
             filetypes=[("Image Files", "*.png *.jpg *.jpeg *.bmp *.tif *.tiff")]
         )
-        if file_path:
-            self.path_var.set(file_path)
-            self.stop_monitoring() # Stop any active monitoring
+        if not files:
+            return
+
+        try:
+            self.path_var.set(f"{len(files)} file(s) selected")
+            
+            # Stop monitoring if it was active
+            self.stop_monitoring() 
             self.start_button.config(state=tk.DISABLED)
             self.stop_button.config(state=tk.DISABLED)
-            self._load_single_image(file_path)
 
-    def _load_single_image(self, file_path):
-        try:
-            img = Image.open(file_path)
-            img_array = np.array(img)
-            self.image_queue.put((img_array, os.path.basename(file_path)))
+            for file_path in files:
+                img = np.array(Image.open(file_path))
+                filename = os.path.basename(file_path)
+                # Put each image into the queue to be displayed sequentially
+                self.image_queue.put((img, filename, file_path))
+
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to load image file: {e}")
+            messagebox.showerror("Batch Load Error", f"Failed to load batch: {e}")
 
     def _select_background_image(self):
         file_path = filedialog.askopenfilename(
@@ -293,14 +335,15 @@ class MonitorWindow:
             filetypes=[("Image Files", "*.png *.jpg *.jpeg *.bmp *.tif *.tiff")]
         )
         if file_path:
+            resolved_path = self._resolve_path(file_path)
             try:
-                img = Image.open(file_path)
+                img = Image.open(resolved_path)
                 self.background_image = np.array(img)
-                self.background_path_var.set(file_path)
-                messagebox.showinfo("Success", f"Background image '{os.path.basename(file_path)}' loaded.")
+                self.background_path_var.set(file_path)  # Keep original path in UI
+                messagebox.showinfo("Success", f"Background image '{os.path.basename(resolved_path)}' loaded.")
                 # If an image is already displayed, re-process it with the new background
                 if self.last_img_array is not None:
-                    self.update_plot(self.last_img_array, self.last_filename)
+                    self.update_plot(self.last_img_array, self.last_filename, self.last_file_path)
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to load background image: {e}")
                 self.background_image = None
@@ -312,17 +355,17 @@ class MonitorWindow:
         messagebox.showinfo("Info", "Background image cleared.")
         # If an image is already displayed, re-process it to remove the background
         if self.last_img_array is not None:
-            self.update_plot(self.last_img_array, self.last_filename)
+            self.update_plot(self.last_img_array, self.last_filename, self.last_file_path)
 
     def start_monitoring(self):
-        if not self.path_var.get() or not os.path.isdir(self.path_var.get()):
+        folder_path = self._resolve_path(self.path_var.get())
+        if not folder_path or not os.path.isdir(folder_path):
             messagebox.showerror("Error", "Please select a valid folder path.")
             return
         
         self.stop_event.clear()
         
         # Initialize the set of seen files
-        folder_path = self.path_var.get()
         try:
             self.seen_files = {
                 os.path.join(folder_path, f) 
@@ -353,7 +396,7 @@ class MonitorWindow:
         
         while not self.stop_event.is_set():
             try:
-                folder_path = self.path_var.get()
+                folder_path = self._resolve_path(self.path_var.get())
                 sleep_time = float(self.sleep_var.get())
 
                 current_files = {
@@ -371,9 +414,17 @@ class MonitorWindow:
                     # Check if the file is an image
                     if os.path.splitext(file_path)[1].lower() in image_extensions:
                         try:
-                            img = Image.open(file_path)
-                            img_array = np.array(img)
-                            self.image_queue.put((img_array, os.path.basename(file_path)))
+                            # Add a delay and retry mechanism for file loading
+                            for _ in range(3):
+                                try:
+                                    img = Image.open(file_path)
+                                    img_array = np.array(img)
+                                    self.image_queue.put((img_array, os.path.basename(file_path), file_path))
+                                    break  # Success
+                                except PermissionError:
+                                    time.sleep(0.5)
+                            else:  # If loop finishes without break
+                                raise IOError(f"Could not open file after retries: {file_path}")
                         except Exception as e:
                             print(f"Error opening image {file_path}: {e}")
                 
@@ -386,55 +437,52 @@ class MonitorWindow:
 
     def process_queue(self):
         try:
-            img_array, filename = self.image_queue.get_nowait()
-            self.update_plot(img_array, filename)
+            img_array, filename, file_path = self.image_queue.get_nowait()
+            self.update_plot(img_array, filename, file_path)
         except Empty:
             pass
         finally:
             self.window.after(100, self.process_queue)
 
-    def update_plot(self, img_array, filename):
+    def update_plot(self, img_array, filename, file_path):
         self.last_img_array = img_array
         self.last_filename = filename
+        self.last_file_path = file_path
         # Trigger a full redraw and processing via update_colormap
         self.update_colormap()
 
-    def _save_image(self, img_array, original_filename):
-        # Determine the base path for saving
-        source_path = self.path_var.get()
-        if not source_path:
-            print("Cannot save: Source path not set.")
-            return
-
+    def _save_image(self, img_array, processed_filename, original_path):
         prefix = self.save_prefix_var.get()
         if not prefix:
-            prefix = "test_" # Default prefix if none is provided in GUI
+            prefix = "sbg_"  # Default prefix if none is provided in GUI
 
-        if os.path.isfile(source_path):
-            # If source is a file, save next to it with prefix
-            save_dir = os.path.dirname(source_path)
-            base_name = os.path.basename(source_path)
-            name, ext = os.path.splitext(base_name)
-            new_filename = f"{prefix}{name}{ext}"
-            save_path = os.path.join(save_dir, new_filename)
-        elif os.path.isdir(source_path):
-            # If source is a folder, create optapp_ folder as before
-            parent_dir, monitor_basename = os.path.split(source_path)
-            if not monitor_basename:
-                monitor_basename = os.path.basename(source_path)
-                parent_dir = os.path.dirname(source_path)
+        # Determine the save directory
+        source_path_from_ui = self._resolve_path(self.path_var.get())
+        save_dir = None
 
+        # Case 1: We are in folder-monitoring mode. Create the 'optapp_' subfolder.
+        if os.path.isdir(source_path_from_ui):
+            parent_dir = os.path.dirname(source_path_from_ui)
+            monitor_basename = os.path.basename(source_path_from_ui)
             save_folder_name = f"optapp_{monitor_basename}"
             save_dir = os.path.join(parent_dir, save_folder_name)
-            os.makedirs(save_dir, exist_ok=True)
-
-            new_filename = f"{prefix}{original_filename}"
-            save_path = os.path.join(save_dir, new_filename)
-        else:
-            print(f"Cannot save: Invalid source path type: {source_path}")
+        
+        # Case 2: A batch of files was loaded. Save alongside the original file.
+        elif original_path and os.path.isfile(original_path):
+            save_dir = os.path.dirname(original_path)
+        
+        # Fallback if no valid directory could be determined
+        if not save_dir:
+            print("Cannot determine a valid save directory. Image will not be saved.")
             return
 
         try:
+            os.makedirs(save_dir, exist_ok=True)
+            
+            base_name = os.path.basename(original_path)
+            new_filename = f"{prefix}{base_name}"
+            save_path = os.path.join(save_dir, new_filename)
+
             img_to_save = Image.fromarray(img_array)
             img_to_save.save(save_path)
             print(f"Image saved to {save_path}")
@@ -443,44 +491,61 @@ class MonitorWindow:
 
     def update_colormap(self):
         if self.last_img_array is None:
-            if self.path_var.get() and os.path.isfile(self.path_var.get()):
-                self._load_single_image(self.path_var.get())
             return
 
-        # --- Start of logic moved from update_plot ---
         processed_img = self.last_img_array.copy()
-        
-        # Subtract background if it exists
+        original_dtype = processed_img.dtype
+        promoted_img = processed_img.astype(np.int32)
+
         if self.background_image is not None:
             try:
                 bg_factor = float(self.bg_factor_var.get())
-                # Promote to a signed type to prevent underflow during subtraction
-                original_dtype = processed_img.dtype
-                promoted_img = processed_img.astype(np.int32)
                 promoted_bg = (self.background_image * bg_factor).astype(np.int32)
+                
+                # --- Dynamic Scaling Logic ---
+                if self.dynamic_bg_subtraction_var and self.dynamic_bg_subtraction_var.get() and self.bg_bbox:
+                    x_min, y_min, x_max, y_max = self.bg_bbox
+                    
+                    # Ensure bbox is within image bounds
+                    y_max, x_max = min(y_max, self.background_image.shape[0]), min(x_max, self.background_image.shape[1])
 
+                    bg_roi = self.background_image[y_min:y_max, x_min:x_max]
+                    avg_bg_in_bbox = bg_roi.mean()
+
+                    if avg_bg_in_bbox > 1e-6:  # Avoid division by zero
+                        # Calculate the average of the raw signal in the same region
+                        raw_signal_roi = self.last_img_array[y_min:y_max, x_min:x_max]
+                        avg_signal_in_bbox = raw_signal_roi.mean()
+                        
+                        # The goal is for the background region in the final image to be zero:
+                        # avg_signal_in_bbox - (avg_bg_in_bbox * total_scaling) = 0
+                        # => total_scaling = avg_signal_in_bbox / avg_bg_in_bbox
+                        total_scaling_factor = avg_signal_in_bbox / avg_bg_in_bbox
+                        
+                        # Apply this total scaling to the original background image
+                        promoted_bg = (self.background_image * total_scaling_factor).astype(np.int32)
+                        
                 subtracted_img = np.subtract(promoted_img, promoted_bg)
+                # --- End of Dynamic Scaling Logic ---
 
                 min_val = 0
-                max_val = np.iinfo(original_dtype).max if np.issubdtype(original_dtype, np.integer) else 1.0
+                max_val = np.iinfo(original_dtype).max if np.issubdtype(original_dtype, np.integer) else np.finfo(original_dtype).max
                 
                 clipped_img = np.clip(subtracted_img, min_val, max_val)
                 processed_img = clipped_img.astype(original_dtype)
-            except ValueError as e:
-                messagebox.showwarning("Background Subtraction Error", f"Could not subtract background. Ensure dimensions match and factor is valid. Error: {e}")
+
             except Exception as e:
-                messagebox.showwarning("Background Subtraction Error", f"An unexpected error occurred during background subtraction: {e}")
+                messagebox.showwarning("Background Subtraction Error", f"An error occurred during background subtraction: {e}")
 
         if self.colorbar:
             self.colorbar.remove()
             self.colorbar = None
 
         self.ax.clear()
-        self.image_on_canvas = self.ax.imshow(processed_img, cmap='viridis', aspect='equal')
+        self.image_on_canvas = self.ax.imshow(processed_img, cmap='viridis', aspect='equal', origin='upper')
         self.ax.set_title(self.last_filename)
         
         self.colorbar = self.fig.colorbar(self.image_on_canvas, ax=self.ax)
-        # --- End of logic moved from update_plot ---
 
         try:
             vmin = self.vmin_var.get()
@@ -498,9 +563,8 @@ class MonitorWindow:
         self.draw_overlays()
         self.canvas.draw()
 
-        # Autosave if enabled
         if self.autosave_var.get():
-            self._save_image(processed_img, self.last_filename)
+            self._save_image(processed_img, self.last_filename, self.last_file_path)
 
     def load_state(self):
         default_state = {
@@ -513,11 +577,13 @@ class MonitorWindow:
             "vmax": "",
             "zero_pt": None,
             "roi_bbox": None,
+            "bg_bbox": None,
             "bg_factor": "1.0"
         }
         try:
-            if os.path.exists(self.state_file):
-                with open(self.state_file, 'r') as f:
+            state_path = self._resolve_path(self.state_file)
+            if os.path.exists(state_path):
+                with open(state_path, 'r') as f:
                     state = json.load(f)
             else:
                 state = default_state
@@ -533,10 +599,11 @@ class MonitorWindow:
         self.vmax_var.set(state.get("vmax", default_state["vmax"]))
         self.zero_pt = state.get("zero_pt", default_state["zero_pt"])
         self.roi_bbox = state.get("roi_bbox", default_state["roi_bbox"])
+        self.bg_bbox = state.get("bg_bbox", default_state["bg_bbox"])
         self.bg_factor_var.set(state.get("bg_factor", default_state["bg_factor"]))
 
         # Load the background image if path exists
-        bg_path = self.background_path_var.get()
+        bg_path = self._resolve_path(self.background_path_var.get())
         if bg_path and os.path.exists(bg_path):
             try:
                 self.background_image = np.array(Image.open(bg_path))
@@ -555,10 +622,12 @@ class MonitorWindow:
             "vmax": self.vmax_var.get(),
             "zero_pt": self.zero_pt,
             "roi_bbox": self.roi_bbox,
+            "bg_bbox": self.bg_bbox,
             "bg_factor": self.bg_factor_var.get()
         }
         try:
-            with open(self.state_file, 'w') as f:
+            state_path = self._resolve_path(self.state_file)
+            with open(state_path, 'w') as f:
                 json.dump(state, f, indent=4)
         except IOError as e:
             print(f"Error saving state: {e}")
@@ -579,6 +648,7 @@ class MonitorWindow:
 
     def is_alive(self):
         return self.window.winfo_exists()
+
 
 if __name__ == '__main__':
     # Example of how to run this window standalone

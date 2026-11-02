@@ -14,6 +14,7 @@ import matplotlib.patches as patches
 from ImageMonitor import MonitorWindow
 from scipy.ndimage import gaussian_filter
 from scipy.spatial import cKDTree
+import pathlib
 
 
 # --- Analysis functions from TPanalysis.py ---
@@ -29,8 +30,9 @@ def x2E(x_dis, m_amu, qom_eV_amu, By, lB, dB):
     with np.errstate(divide='ignore', invalid='ignore'):
         energy_joules = 1/2 * m_amu * amu * (qom_eV_amu * (eV / amu) / x_dis * cB)**2
     energy_MeV = energy_joules / (1e6 * eV)
-    energy_MeV[np.isinf(energy_MeV)] = 0 # Replace inf with 0
+    energy_MeV[np.isinf(energy_MeV)] = 0  # Replace inf with 0
     return energy_MeV
+
 
 def analyze_energy_spectrum(raw_image, energy_map, bbox):
     """
@@ -54,6 +56,7 @@ def analyze_energy_spectrum(raw_image, energy_map, bbox):
     
     return energy_bins[:-1], spectrum
 
+
 def plot_spectrum(energy_bins, spectrum):
     fig, ax = plt.subplots()
     ax.plot(energy_bins, spectrum)
@@ -61,7 +64,8 @@ def plot_spectrum(energy_bins, spectrum):
     ax.set_ylabel('Counts')
     ax.set_title('Energy Spectrum')
     plt.show()
-    
+
+
 def save_spectrum(filename, energy_bins, spectrum, std_spectrum=None):
     """Saves the energy spectrum to a text file."""
     if std_spectrum is not None:
@@ -73,8 +77,6 @@ def save_spectrum(filename, energy_bins, spectrum, std_spectrum=None):
     np.savetxt(filename, data, header=header, delimiter=',')
 
 
-from scipy.spatial import cKDTree
-
 class TPAnalyzerWindow:
     def __init__(self, master, monitor_window=None):
         self.master = master
@@ -83,11 +85,12 @@ class TPAnalyzerWindow:
         self.window.title("TP Analyzer")
         self.window.geometry("1200x800")
 
+        self.script_dir = pathlib.Path(__file__).parent
         self.monitoring_thread = None
         self.stop_event = threading.Event()
         self.seen_files = set()
         self.accumulated_images = []
-        self.accumulated_image_paths = [] # To store file paths
+        self.accumulated_image_paths = []  # To store file paths
         self.state_file = "tp_analyzer_state.json"
         self.last_mean_img = None
         self.last_std_img = None
@@ -99,6 +102,13 @@ class TPAnalyzerWindow:
         self.load_state()
         self.periodic_save()
         self.window.protocol("WM_DELETE_WINDOW", self.on_closing)
+
+    def _resolve_path(self, path_str):
+        if not path_str or os.path.isabs(path_str):
+            return path_str
+        if os.path.exists(path_str):
+            return os.path.abspath(path_str)
+        return str(self.script_dir / path_str)
 
     def _setup_widgets(self):
         main_frame = ttk.Frame(self.window, padding="10")
@@ -122,8 +132,8 @@ class TPAnalyzerWindow:
         
         browse_folder_button = ttk.Button(source_frame, text="Folder", command=self._browse_folder)
         browse_folder_button.grid(row=1, column=1, sticky=tk.W, padx=2)
-        browse_file_button = ttk.Button(source_frame, text="File", command=self._browse_file)
-        browse_file_button.grid(row=1, column=2, sticky=tk.W, padx=2)
+        browse_batch_button = ttk.Button(source_frame, text="Batch Select", command=self._browse_batch_files)
+        browse_batch_button.grid(row=1, column=2, sticky=tk.W, padx=2)
 
         ttk.Label(source_frame, text="Images to Accumulate:").grid(row=2, column=0, sticky=tk.W, padx=5, pady=5)
         self.accum_num_var = tk.StringVar(value="10")
@@ -134,7 +144,7 @@ class TPAnalyzerWindow:
         
         self.auto_analysis_var = tk.BooleanVar(value=False)
         auto_analysis_check = ttk.Checkbutton(source_frame, text="Auto Analysis Loop", variable=self.auto_analysis_var)
-        auto_analysis_check.grid(row=3, column=0, columnspan=3, sticky=tk.W, padx=5, pady=(5,0))
+        auto_analysis_check.grid(row=3, column=0, columnspan=3, sticky=tk.W, padx=5, pady=(5, 0))
 
         source_frame.columnconfigure(1, weight=1)
 
@@ -211,15 +221,60 @@ class TPAnalyzerWindow:
             self.start_button.config(text="Start Accumulation")
             self.run_button.config(state=tk.DISABLED)
 
-    def _browse_file(self):
-        file_path = filedialog.askopenfilename(
-            title="Select a single image file",
+    def _browse_batch_files(self):
+        files = filedialog.askopenfilenames(
+            title="Select image files for analysis",
             filetypes=[("Image Files", "*.png *.jpg *.jpeg *.bmp *.tif *.tiff")]
         )
-        if file_path:
-            self.path_var.set(file_path)
+        if not files:
+            return
+
+        # If only one file is selected, treat it as a single-file preview setup
+        if len(files) == 1:
+            self.path_var.set(files[0])
             self.start_button.config(text="Preview Single Image")
             self.run_button.config(state=tk.DISABLED)
+            return
+
+        # If multiple files are selected, confirm and run batch analysis
+        if not messagebox.askyesno("Confirm Batch Analysis", f"This will analyze {len(files)} files one-by-one and save an output for each. This may take time. Continue?"):
+            return
+            
+        # Run in a separate thread to avoid freezing the GUI
+        processing_thread = threading.Thread(
+            target=self._run_sequential_analysis, 
+            args=(files,), 
+            daemon=True
+        )
+        processing_thread.start()
+
+    def _run_sequential_analysis(self, files):
+        """
+        This method runs in a thread to process a list of files sequentially.
+        """
+        for i, file_path in enumerate(files):
+            try:
+                self.status_var.set(f"Processing {i+1}/{len(files)}: {os.path.basename(file_path)}")
+
+                # 1. Load the image
+                img = np.array(Image.open(file_path))
+
+                # 2. Set the data for a single-image analysis
+                self.last_mean_img = img
+                self.last_std_img = np.zeros_like(img)
+                
+                # 3. Run the preview calculations to generate the analysis mask
+                self._draw_preview()
+
+                # 4. Run the final analysis in non-interactive mode
+                self.confirm_and_run_analysis(image_paths_for_analysis=[file_path], is_batch_mode=True)
+                
+            except Exception as e:
+                print(f"Failed to process {file_path}: {e}")
+                self.status_var.set(f"Error on file {i+1}. See console for details.")
+                time.sleep(2)
+        
+        self.status_var.set(f"Batch processing of {len(files)} files complete.")
 
     def _browse_save_folder(self):
         folder_selected = filedialog.askdirectory(
@@ -242,23 +297,22 @@ class TPAnalyzerWindow:
         self.status_var.set("Preview updated with new ROI/Zero.")
 
     def start_accumulation_or_preview(self):
-        source_path = self.path_var.get()
+        source_path = self._resolve_path(self.path_var.get())
         if not source_path:
             messagebox.showerror("Error", "Please select a source path.")
             return
 
         self.run_button.config(state=tk.DISABLED)
 
-        # If auto-analysis is on, use the new loop
+        # If auto-analysis is on, use the auto loop
         if self.auto_analysis_var.get():
             if not os.path.isdir(source_path):
                 messagebox.showerror("Error", "Auto-analysis only works with a folder source.")
                 return
             
-            self.accumulated_images = [] # Initialize image buffer
+            self.accumulated_images = []
             self.stop_event.clear()
             
-            # Initialize seen_files with current directory contents
             try:
                 self.seen_files = {os.path.join(source_path, f) for f in os.listdir(source_path)}
             except OSError as e:
@@ -268,24 +322,28 @@ class TPAnalyzerWindow:
             self.start_button.config(state=tk.DISABLED)
             self.stop_button.config(state=tk.NORMAL)
             self.status_var.set("Starting auto-analysis loop...")
-            self.window.after(100, self._auto_analysis_loop) # Kick off the loop
+            self.window.after(100, self._auto_analysis_loop)
             return
 
-        # --- Existing logic for single preview or single accumulation ---
+        # --- Logic for loading a single file for manual preview ---
         if os.path.isfile(source_path):
             try:
                 self.status_var.set(f"Loading {os.path.basename(source_path)}...")
                 self.window.update_idletasks()
+                
                 img = np.array(Image.open(source_path))
+                
                 self.last_mean_img = img
-                self.last_std_img = np.zeros_like(img) # No std for a single image
-                self.accumulated_image_paths = [source_path] # Store the path
-                self.status_var.set("Image loaded. Calculating preview...")
+                self.last_std_img = np.zeros_like(img)
+                self.accumulated_image_paths = [source_path]
+
                 self._draw_preview()
             except Exception as e:
                 messagebox.showerror("Image Load Error", f"Failed to load single image: {e}")
-                return
-        elif os.path.isdir(source_path):
+            return
+
+        # --- Logic for accumulating from a folder ---
+        if os.path.isdir(source_path):
             if self.monitoring_thread and self.monitoring_thread.is_alive():
                 messagebox.showinfo("Info", "Accumulation is already in progress.")
                 return
@@ -306,7 +364,8 @@ class TPAnalyzerWindow:
             self.start_button.config(state=tk.DISABLED)
             self.stop_button.config(state=tk.NORMAL)
         else:
-            messagebox.showerror("Error", "Invalid source path.")
+            if "files selected" not in source_path:
+                messagebox.showerror("Error", "Invalid source path.")
 
     def _auto_analysis_loop(self):
         if self.stop_event.is_set():
@@ -315,7 +374,7 @@ class TPAnalyzerWindow:
             self.stop_button.config(state=tk.DISABLED)
             return
 
-        source_path = self.path_var.get()
+        source_path = self._resolve_path(self.path_var.get())
         try:
             num_to_accumulate = int(self.accum_num_var.get())
         except ValueError:
@@ -338,22 +397,20 @@ class TPAnalyzerWindow:
             for file_path in new_files:
                 if os.path.splitext(file_path)[1].lower() in image_extensions:
                     try:
-                        # Add a small delay and retry mechanism for file loading
                         for _ in range(3):
                             try:
                                 img = Image.open(file_path)
                                 self.accumulated_images.append(np.array(img))
                                 self.accumulated_image_paths.append(file_path)
-                                break # Success
+                                break
                             except PermissionError:
                                 time.sleep(0.5)
-                        else: # If loop finishes without break
+                        else:
                             raise IOError(f"Could not open file after retries: {file_path}")
                     except Exception as e:
                         print(f"Error opening image {file_path}: {e}")
         
         self.seen_files = current_files
-        # --- End of monitoring logic ---
 
         self.status_var.set(f"Auto-monitoring... Collected {len(self.accumulated_images)}/{num_to_accumulate} images.")
 
@@ -365,7 +422,6 @@ class TPAnalyzerWindow:
             batch_images = self.accumulated_images[:num_to_accumulate]
             self.accumulated_images = self.accumulated_images[num_to_accumulate:]
             
-            # Keep track of the paths for the batch being processed
             batch_image_paths = self.accumulated_image_paths[:num_to_accumulate]
             self.accumulated_image_paths = self.accumulated_image_paths[num_to_accumulate:]
 
@@ -373,13 +429,12 @@ class TPAnalyzerWindow:
             self.last_mean_img = np.mean(images_stack, axis=0)
             self.last_std_img = np.std(images_stack, axis=0)
 
-            # Pass the paths to the analysis functions
             self._draw_preview()
             self.confirm_and_run_analysis(image_paths_for_analysis=batch_image_paths)
 
         # --- Schedule next run ---
         if not self.stop_event.is_set():
-            self.window.after(2000, self._auto_analysis_loop) # Check for new files every 2s
+            self.window.after(2000, self._auto_analysis_loop)
         else:
             self.status_var.set("Auto-analysis stopped.")
             self.start_button.config(state=tk.NORMAL)
@@ -392,14 +447,14 @@ class TPAnalyzerWindow:
         self.status_var.set("Status: Accumulation stopped by user.")
 
     def _monitor_for_accumulation(self):
-        source_path = self.path_var.get()
+        source_path = self._resolve_path(self.path_var.get())
         try:
             num_to_accumulate = int(self.accum_num_var.get())
         except ValueError:
             self.status_var.set("Status: Error - Invalid accumulation number.")
             return
 
-        self.status_var.set(f"Status: Waiting for new files...")
+        self.status_var.set("Status: Waiting for new files...")
         image_extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff'}
 
         while not self.stop_event.is_set():
@@ -415,7 +470,7 @@ class TPAnalyzerWindow:
                             self.accumulated_image_paths.append(file_path)
                             self.status_var.set(f"Status: Collected {len(self.accumulated_images)}/{num_to_accumulate} images...")
                             if len(self.accumulated_images) >= num_to_accumulate:
-                                self.stop_event.set() # Signal to stop
+                                self.stop_event.set()
                                 break
                         except Exception as e:
                             print(f"Error opening image {file_path}: {e}")
@@ -423,25 +478,21 @@ class TPAnalyzerWindow:
                 self.seen_files = current_files
                 if self.stop_event.is_set():
                     break
-                time.sleep(1) # Check for new files every second
+                time.sleep(1)
 
             except Exception as e:
                 print(f"Error in monitoring loop: {e}")
                 time.sleep(2)
 
         if len(self.accumulated_images) >= num_to_accumulate:
-            self.status_var.set("Status: Accumulation complete. Calculating stats...")
-            # Process only the required number of images
             images_to_process = self.accumulated_images[:num_to_accumulate]
-            self.accumulated_image_paths = self.accumulated_image_paths[:num_to_accumulate]
-
             images_stack = np.stack(images_to_process, axis=0)
             self.last_mean_img = np.mean(images_stack, axis=0)
             self.last_std_img = np.std(images_stack, axis=0)
-            self.status_var.set("Status: Stats calculated. Drawing preview...")
+            self.accumulated_image_paths = self.accumulated_image_paths[:num_to_accumulate]
+
             self._draw_preview()
         
-        # Reset buttons after thread finishes
         self.start_button.config(state=tk.NORMAL)
         self.stop_button.config(state=tk.DISABLED)
 
@@ -455,10 +506,13 @@ class TPAnalyzerWindow:
 
         try:
             config = {name: var.get() for name, var in self.param_vars.items()}
-            for k in ["Z", "A", "binE"]: config[k] = int(float(config[k]))
-            for k in ["pixel_size", "zero_width", "Bz", "lB", "dB", "Ez", "lE", "dE", "minE", "maxE"]: config[k] = float(config[k])
+            for k in ["Z", "A", "binE"]:
+                config[k] = int(float(config[k]))
+            for k in ["pixel_size", "zero_width", "Bz", "lB", "dB", "Ez", "lE", "dE", "minE", "maxE"]:
+                config[k] = float(config[k])
             
             config["zero_pt"] = self.monitor_window.get_zero_point()
+
             roi_bbox = self.monitor_window.get_roi_bbox()
             if config["zero_pt"] is None or roi_bbox is None:
                 raise ValueError("Zero Point or ROI not set in Image Monitor.")
@@ -515,7 +569,7 @@ class TPAnalyzerWindow:
             messagebox.showerror("Preview Error", f"Could not generate preview: {e}")
             self.status_var.set(f"Status: Preview Error - {e}")
 
-    def confirm_and_run_analysis(self, image_paths_for_analysis=None):
+    def confirm_and_run_analysis(self, image_paths_for_analysis=None, is_batch_mode=False):
         self.status_var.set("Starting final analysis...")
         self.window.update_idletasks()
         
@@ -523,7 +577,6 @@ class TPAnalyzerWindow:
             messagebox.showerror("Error", "No preview data available. Click 'Start/Preview' first.")
             return
 
-        # If paths are not passed from an auto-loop, use the instance's stored paths
         if image_paths_for_analysis is None:
             image_paths_for_analysis = self.accumulated_image_paths
 
@@ -538,14 +591,18 @@ class TPAnalyzerWindow:
             if shot_number_match:
                 shot_number = int(shot_number_match.group(0))
             else:
-                shot_number = -1 # Default/error value
+                shot_number = -1
 
             config = {name: var.get() for name, var in self.param_vars.items()}
-            for k in ["Z", "A", "binE"]: config[k] = int(float(config[k]))
-            for k in ["pixel_size", "zero_width", "Bz", "lB", "dB", "Ez", "lE", "dE", "minE", "maxE", "gaussian_sigma"]: config[k] = float(config[k])
+            for k in ["Z", "A", "binE"]:
+                config[k] = int(float(config[k]))
+            for k in ["pixel_size", "zero_width", "Bz", "lB", "dB", "Ez", "lE", "dE", "minE", "maxE", "gaussian_sigma"]:
+                config[k] = float(config[k])
             config["is_gaussian_filter"] = config["is_gaussian_filter"].lower() in ['true', '1', 't', 'y', 'yes']
             config["filePath"] = self.path_var.get()
             config["zero_pt"] = self.monitor_window.get_zero_point()
+            config["roi_bbox"] = self.monitor_window.get_roi_bbox()
+            config["bg_bbox"] = self.monitor_window.get_bg_bbox()
             
             tp_count_roi = self.last_tp_count_roi
             mean_spectrum = np.sum(tp_count_roi, axis=0)
@@ -554,7 +611,6 @@ class TPAnalyzerWindow:
             roi_bbox = self.monitor_window.get_roi_bbox()
             x_min, y_min, x_max, y_max = roi_bbox
             std_roi = self.last_std_img[y_min:y_max, x_min:x_max]
-            # The variance of the sum is the sum of variances
             std_spectrum = np.sqrt(np.sum(std_roi**2, axis=0))
 
             roi_x_pixels = np.arange(self.last_roi_coords['x_min'], self.last_roi_coords['x_min'] + tp_count_roi.shape[1])
@@ -585,68 +641,76 @@ class TPAnalyzerWindow:
 
             if config["is_gaussian_filter"]:
                 smoothed_mean_spectrum = gaussian_filter(es_y_mean, sigma=config["gaussian_sigma"])
-                # Propagate error for smoothing (approximation)
                 smoothed_std_spectrum = gaussian_filter(es_y_std**2, sigma=config["gaussian_sigma"])**0.5
             else:
                 smoothed_mean_spectrum = unsmoothed_mean_spectrum
                 smoothed_std_spectrum = unsmoothed_std_spectrum
-
-            self._show_analysis_results(tp_count_roi, es_x, es_dis, smoothed_mean_spectrum, smoothed_std_spectrum)
+            
+            if not is_batch_mode:
+                self._show_analysis_results(tp_count_roi, es_x, es_dis, smoothed_mean_spectrum, smoothed_std_spectrum)
 
             if self.save_spectrum_var.get():
-                save_folder = self.save_path_var.get()
-                # if folder does not exist, use the source path
-                if not save_folder:
-                    if os.path.isfile(self.path_var.get()):
-                        save_folder = os.path.dirname(self.path_var.get())
-                    elif os.path.isdir(self.path_var.get()):
-                        save_folder = self.path_var.get()
+                save_folder = self._resolve_path(self.save_path_var.get())
+                
+                if not save_folder or not os.path.isdir(save_folder):
+                    save_folder = os.path.dirname(last_image_path)
+
+                os.makedirs(save_folder, exist_ok=True)
                     
                 prefix = self.save_prefix_var.get()
-                if not prefix:
-                    if os.path.isfile(self.path_var.get()):
-                        prefix = os.path.splitext(os.path.basename(self.path_var.get()))[0]
-                    else:
-                        # Use the shot number from the last image in the batch as the prefix
-                        prefix = os.path.splitext(os.path.basename(last_image_path))[0]
+                base_filename = os.path.splitext(os.path.basename(last_image_path))[0]
                 
-                filename = f"{prefix}_tp_analysis.npz"
+                if prefix:
+                    final_prefix = f"{prefix}_{base_filename}"
+                else:
+                    final_prefix = base_filename
+
+                filename = f"{final_prefix}_tp_analysis.npz"
                 npz_path = os.path.join(save_folder, filename)
 
-                # Update config for saving
                 config["savFolderPath"] = save_folder
 
                 np.savez(npz_path, 
-                            config=config,
-                            shot_number=shot_number,
-                            avg_image=self.last_mean_img,
-                            std_image=self.last_std_img,
-                            energy_axis=es_x, 
-                            distance_axis=es_dis,
-                            mean_spectrum=smoothed_mean_spectrum,
-                            std_spectrum=smoothed_std_spectrum)
-                self.status_var.set(f"Analysis finished. Results saved to {npz_path}")
+                         config=config,
+                         shot_number=shot_number,
+                         avg_image=self.last_mean_img,
+                         std_image=self.last_std_img,
+                         energy_axis=es_x, 
+                         distance_axis=es_dis,
+                         mean_spectrum=smoothed_mean_spectrum,
+                         std_spectrum=smoothed_std_spectrum)
+                
+                if not is_batch_mode:
+                    self.status_var.set(f"Analysis finished. Results saved to {npz_path}")
                     
-                    
-            else:
+            elif not is_batch_mode:
                 self.status_var.set("Thomson Parabola analysis finished.")
 
         except Exception as e:
-            messagebox.showerror("Analysis Error", f"An error occurred during analysis: {e}")
+            if not is_batch_mode:
+                messagebox.showerror("Analysis Error", f"An error occurred during analysis: {e}")
             self.status_var.set(f"Status: Analysis Error - {e}")
 
     def _show_analysis_results(self, tp_count_roi, es_x, es_dis, mean_spectrum, std_spectrum):
-        if self.analysis_results_window and self.analysis_results_window.winfo_exists():
-            self.analysis_results_window.destroy()
+        if not hasattr(self, 'analysis_results_window') or not self.analysis_results_window or not self.analysis_results_window.winfo_exists():
+            self.analysis_results_window = tk.Toplevel(self.window)
+            self.analysis_results_window.title("Analysis Results")
+            self.analysis_results_window.geometry("1200x500")
 
-        self.analysis_results_window = tk.Toplevel(self.window)
-        self.analysis_results_window.title("Analysis Results")
-        self.analysis_results_window.geometry("1200x500")
+            self.results_fig = Figure(figsize=(12, 5), dpi=100)
+            self.results_axes = [
+                self.results_fig.add_subplot(131),
+                self.results_fig.add_subplot(132),
+                self.results_fig.add_subplot(133)
+            ]
+            
+            self.results_canvas = FigureCanvasTkAgg(self.results_fig, master=self.analysis_results_window)
+            self.results_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        
+        for ax in self.results_axes:
+            ax.clear()
 
-        fig = Figure(figsize=(12, 5), dpi=100)
-        ax1 = fig.add_subplot(131)
-        ax2 = fig.add_subplot(132)
-        ax3 = fig.add_subplot(133)
+        ax1, ax2, ax3 = self.results_axes
 
         ax1.imshow(tp_count_roi, cmap='gray_r', aspect='auto')
         ax1.set_xlabel("x (pixels in ROI)")
@@ -668,10 +732,10 @@ class TPAnalyzerWindow:
         ax3.set_title("Spatial Spectrum")
         ax3.grid(True)
 
-        fig.tight_layout()
-        canvas = FigureCanvasTkAgg(fig, master=self.analysis_results_window)
-        canvas.draw()
-        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        self.results_fig.tight_layout()
+        self.results_canvas.draw()
+        
+        self.analysis_results_window.lift()
 
     def load_state(self):
         default_params = {
@@ -687,11 +751,13 @@ class TPAnalyzerWindow:
             "params": default_params,
             "save_spectrum": True,
             "save_path": "",
-            "save_prefix": ""
+            "save_prefix": "",
+            "auto_analysis": False
         }
         try:
-            if os.path.exists(self.state_file):
-                with open(self.state_file, 'r') as f:
+            state_path = self._resolve_path(self.state_file)
+            if os.path.exists(state_path):
+                with open(state_path, 'r') as f:
                     state = json.load(f)
             else:
                 state = default_state
@@ -700,6 +766,7 @@ class TPAnalyzerWindow:
 
         self.path_var.set(state.get("source_path", default_state["source_path"]))
         self.accum_num_var.set(state.get("accum_num", default_state["accum_num"]))
+        self.auto_analysis_var.set(state.get("auto_analysis", default_state["auto_analysis"]))
 
         params_to_load = state.get("params", default_params)
         for name, var in self.param_vars.items():
@@ -716,10 +783,12 @@ class TPAnalyzerWindow:
             "params": {name: var.get() for name, var in self.param_vars.items()},
             "save_spectrum": self.save_spectrum_var.get(),
             "save_path": self.save_path_var.get(),
-            "save_prefix": self.save_prefix_var.get()
+            "save_prefix": self.save_prefix_var.get(),
+            "auto_analysis": self.auto_analysis_var.get()
         }
         try:
-            with open(self.state_file, 'w') as f:
+            state_path = self._resolve_path(self.state_file)
+            with open(state_path, 'w') as f:
                 json.dump(state, f, indent=4)
         except IOError as e:
             print(f"Error saving TP analyzer state: {e}")
@@ -741,20 +810,15 @@ class TPAnalyzerWindow:
     def is_alive(self):
         return self.window.winfo_exists()
 
+
 if __name__ == '__main__':
-    # Example of how to run this window standalone
     root = tk.Tk()
     root.title("Main App")
-    # Hide the dummy root window, as the Toplevels are the main interface
     root.withdraw()
 
-    # The Analyzer depends on the Monitor, so create the Monitor window first.
     monitor_app = MonitorWindow(root)
-    
-    # Now create the analyzer and pass the monitor instance to it.
     analyzer_app = TPAnalyzerWindow(root, monitor_window=monitor_app)
 
-    # Lift the windows to ensure they are visible
     monitor_app.lift()
     analyzer_app.lift()
     

@@ -24,5 +24,5 @@ For detailed instructions on setting up the ROIs, connecting to EPICS, and runni
 ```bash
 # Ensure you are on Python 3.9
 pip install -r requirements.txt
-python OptimizerGUI.py
+python main.py
 ```

@@ -7,10 +7,12 @@ import numpy as np
 import ast
 import json
 import os
+import re
 import threading
 import time
 import glob
 import importlib.util
+import pathlib
 
 # Assuming these files are in the same directory
 import AutoFireFunc as aff
@@ -18,17 +20,20 @@ import BayesianOptimization as bo
 from ImageMonitor import MonitorWindow
 from TPAnalyzer import TPAnalyzerWindow
 
+
 class OptimizerGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Bayesian Optimization Assistant")
+        self.script_dir = pathlib.Path(__file__).parent
         self.client = None  # For lazy initialization of gspread client
-        self.script_dir = os.path.dirname(os.path.abspath(__file__))
-        self.state_file = os.path.join(self.script_dir, "gui_state.json")
-        self.params_file = os.path.join(self.script_dir, "optimizer_params.json")
+        self.worksheet = None  # Cached worksheet instance
+        self.state_file = "gui_state.json"
+        self.params_file = "optimizer_params.json"
         self.last_suggestion = None  # To store the latest suggestion
-        self.monitor_window = None # To hold the monitor window instance
-        self.tp_analyzer_window = None # To hold the TP analyzer window instance
+        self.monitor_window = None  # To hold the monitor window instance
+        self.tp_analyzer_window = None  # To hold the TP analyzer window instance
+        self.settings_window = None
 
         # --- UI Elements ---
         frame = tk.Frame(root, padx=10, pady=10)
@@ -51,15 +56,19 @@ class OptimizerGUI:
         self.suggestion_var = tk.StringVar(value="Suggestion will appear here.")
         self.best_var = tk.StringVar(value="Current best will appear here.")
 
-        # Auto-upload variables
+        # Auto-upload & Settings variables
         self.analysis_folder_var = tk.StringVar()
         self.output_extraction_func_var = tk.StringVar()
         self.prerequisite_func_var = tk.StringVar()
+        self.post_recording_func_var = tk.StringVar()
         self.file_pattern_var = tk.StringVar()
         self.autoupload_status_var = tk.StringVar(value="Status: Idle")
         self.autoupload_thread = None
         self.stop_autoupload_event = threading.Event()
         self.auto_optimize_var = tk.BooleanVar()
+        self.append_to_sheet_var = tk.BooleanVar(value=True)
+        self.update_epics_var = tk.BooleanVar(value=True)
+        self.dynamic_bg_subtraction_var = tk.BooleanVar(value=False)
         self.gsheet_status_var = tk.StringVar(value="Status: Not Connected")
 
         # --- UI Layout ---
@@ -120,16 +129,18 @@ class OptimizerGUI:
         tk.Label(autoupload_frame, text="Prerequisite Func:").grid(row=2, column=0, sticky=tk.W, pady=2)
         tk.Entry(autoupload_frame, textvariable=self.prerequisite_func_var, width=40).grid(row=2, column=1, sticky=tk.W)
 
+        tk.Label(autoupload_frame, text="Post-Recording Func:").grid(row=3, column=0, sticky=tk.W, pady=2)
+        tk.Entry(autoupload_frame, textvariable=self.post_recording_func_var, width=40).grid(row=3, column=1, sticky=tk.W)
+
         autoupload_button_frame = tk.Frame(autoupload_frame)
         self.start_autoupload_button = tk.Button(autoupload_button_frame, text="Start Auto-Upload", command=self.start_autoupload)
         self.start_autoupload_button.pack(side=tk.LEFT, padx=5)
         self.stop_autoupload_button = tk.Button(autoupload_button_frame, text="Stop Auto-Upload", command=self.stop_autoupload, state=tk.DISABLED)
         self.stop_autoupload_button.pack(side=tk.LEFT, padx=5)
         tk.Checkbutton(autoupload_button_frame, text="Auto-Optimization Loop", variable=self.auto_optimize_var).pack(side=tk.LEFT, padx=10)
-        autoupload_button_frame.grid(row=3, column=0, columnspan=4, pady=5)
+        autoupload_button_frame.grid(row=4, column=0, columnspan=4, pady=5)
         
-        tk.Label(autoupload_frame, textvariable=self.autoupload_status_var).grid(row=4, column=0, columnspan=4, sticky=tk.W, pady=2)
-
+        tk.Label(autoupload_frame, textvariable=self.autoupload_status_var).grid(row=5, column=0, columnspan=4, sticky=tk.W, pady=2)
 
         # --- Action Buttons ---
         button_frame = tk.Frame(frame)
@@ -142,6 +153,8 @@ class OptimizerGUI:
         self.monitor_button.pack(side=tk.LEFT, padx=5)
         self.tp_analyzer_button = tk.Button(button_frame, text="TP Analyzer", command=self.open_tp_analyzer_window)
         self.tp_analyzer_button.pack(side=tk.LEFT, padx=5)
+        self.settings_button = tk.Button(button_frame, text="Settings", command=self.open_settings_window)
+        self.settings_button.pack(side=tk.LEFT, padx=5)
 
         # --- Results Display ---
         results_frame = tk.LabelFrame(frame, text="Optimization Suggestion", padx=10, pady=10)
@@ -154,9 +167,34 @@ class OptimizerGUI:
         self.periodic_save()
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
+    def _resolve_path(self, path_str):
+        if not path_str or os.path.isabs(path_str):
+            return path_str
+        if os.path.exists(path_str):
+            return os.path.abspath(path_str)
+        repo_root_candidate = self.script_dir.parent / path_str
+        if repo_root_candidate.exists():
+            return str(repo_root_candidate)
+        return str(self.script_dir / path_str)
+
+    def open_settings_window(self):
+        if self.settings_window is not None and self.settings_window.winfo_exists():
+            self.settings_window.lift()
+            return
+
+        self.settings_window = tk.Toplevel(self.root)
+        self.settings_window.title("Settings")
+        
+        settings_frame = tk.Frame(self.settings_window, padx=10, pady=10)
+        settings_frame.pack(fill=tk.BOTH, expand=True)
+
+        tk.Checkbutton(settings_frame, text="Append to Google Sheet", variable=self.append_to_sheet_var).pack(anchor=tk.W, pady=5)
+        tk.Checkbutton(settings_frame, text="Update EPICS PVs", variable=self.update_epics_var).pack(anchor=tk.W, pady=5)
+        tk.Checkbutton(settings_frame, text="Dynamic Background Subtraction", variable=self.dynamic_bg_subtraction_var).pack(anchor=tk.W, pady=5)
+
     def open_monitor_window(self):
         if self.monitor_window is None or not self.monitor_window.is_alive():
-            self.monitor_window = MonitorWindow(self.root)
+            self.monitor_window = MonitorWindow(self.root, dynamic_bg_subtraction_var=self.dynamic_bg_subtraction_var)
         else:
             self.monitor_window.lift()
 
@@ -172,8 +210,7 @@ class OptimizerGUI:
 
     def load_state(self):
         # Read from gsheet_config.json if available
-        import os, json
-        config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'gsheet_config.json')
+        config_path = self.script_dir.parent / 'gsheet_config.json'
         try:
             with open(config_path, 'r') as f:
                 cfg = json.load(f)
@@ -181,7 +218,7 @@ class OptimizerGUI:
             t_path = cfg.get("token_path", r"C:\path\to\token.json")
             s_url = cfg.get("spreadsheet_url", "https://docs.google.com/spreadsheets/d/YOUR_DOCUMENT_ID/edit")
             s_sheet = cfg.get("worksheet_name", "test")
-        except:
+        except Exception:
             c_path = r"C:\path\to\credentials.json"
             t_path = r"C:\path\to\token.json"
             s_url = "https://docs.google.com/spreadsheets/d/YOUR_DOCUMENT_ID/edit"
@@ -204,11 +241,13 @@ class OptimizerGUI:
             "analysis_folder": "",
             "output_extraction_func_file": "sim_user_defined_function.py",
             "prerequisite_func_file": "",
+            "post_recording_func_file": "",
             "file_pattern": "*_tp_analysis.npz"
         }
         try:
-            if os.path.exists(self.state_file):
-                with open(self.state_file, 'r') as f:
+            state_path = self._resolve_path(self.state_file)
+            if os.path.exists(state_path):
+                with open(state_path, 'r') as f:
                     state = json.load(f)
             else:
                 state = default_state
@@ -231,8 +270,12 @@ class OptimizerGUI:
         self.analysis_folder_var.set(state.get("analysis_folder", default_state["analysis_folder"]))
         self.output_extraction_func_var.set(state.get("output_extraction_func_file", default_state["output_extraction_func_file"]))
         self.prerequisite_func_var.set(state.get("prerequisite_func_file", default_state["prerequisite_func_file"]))
+        self.post_recording_func_var.set(state.get("post_recording_func_file", default_state.get("post_recording_func_file", "")))
         self.file_pattern_var.set(state.get("file_pattern", default_state["file_pattern"]))
         self.auto_optimize_var.set(state.get("auto_optimize", False))
+        self.append_to_sheet_var.set(state.get("append_to_sheet", True))
+        self.update_epics_var.set(state.get("update_epics", True))
+        self.dynamic_bg_subtraction_var.set(state.get("dynamic_bg_subtraction", False))
 
     def save_state(self):
         state = {
@@ -252,11 +295,16 @@ class OptimizerGUI:
             "analysis_folder": self.analysis_folder_var.get(),
             "output_extraction_func_file": self.output_extraction_func_var.get(),
             "prerequisite_func_file": self.prerequisite_func_var.get(),
+            "post_recording_func_file": self.post_recording_func_var.get(),
             "file_pattern": self.file_pattern_var.get(),
-            "auto_optimize": self.auto_optimize_var.get()
+            "auto_optimize": self.auto_optimize_var.get(),
+            "append_to_sheet": self.append_to_sheet_var.get(),
+            "update_epics": self.update_epics_var.get(),
+            "dynamic_bg_subtraction": self.dynamic_bg_subtraction_var.get()
         }
         try:
-            with open(self.state_file, 'w') as f:
+            state_path = self._resolve_path(self.state_file)
+            with open(state_path, 'w') as f:
                 json.dump(state, f, indent=4)
         except IOError as e:
             print(f"Error saving state: {e}")
@@ -266,33 +314,34 @@ class OptimizerGUI:
         self.root.after(30000, self.periodic_save)
 
     def _execute_user_function(self, file_path, function_name, auto_mode=False):
-        if not file_path or not os.path.isfile(file_path):
-            # Silently ignore if no file is provided.
-            return True # Indicate success
+        resolved_path = self._resolve_path(file_path)
+        if not resolved_path or not os.path.isfile(resolved_path):
+            if file_path:
+                print(f"Warning: User function file not found: {resolved_path}")
+            return True  # Indicate success to not block the process
 
         try:
-            # Create a unique module name to avoid conflicts if loading multiple times
-            module_name = f"user_module_{function_name}"
-            spec = importlib.util.spec_from_file_location(module_name, file_path)
+            module_name = f"user_module_{function_name}_{os.path.basename(resolved_path)}"
+            spec = importlib.util.spec_from_file_location(module_name, resolved_path)
             user_module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(user_module)
             
             if hasattr(user_module, function_name):
                 func = getattr(user_module, function_name)
-                func() # Execute the function
-                print(f"Successfully executed user function '{function_name}' from {file_path}")
+                func()
+                print(f"Successfully executed user function '{function_name}' from {resolved_path}")
                 return True
             else:
-                raise AttributeError(f"Function '{function_name}' not found in {file_path}")
+                raise AttributeError(f"Function '{function_name}' not found in {resolved_path}")
 
         except Exception as e:
-            error_msg = f"Error executing user function from {file_path}: {e}"
+            error_msg = f"Error executing user function from {resolved_path}: {e}"
             if not auto_mode:
                 messagebox.showerror("User Function Error", error_msg)
             else:
                 print(f"Auto-Optimization ERROR: {error_msg}")
                 self.autoupload_status_var.set(f"Status: User Func Error - {e}")
-            return False # Indicate failure
+            return False
 
     def on_closing(self):
         self.save_state()
@@ -312,7 +361,6 @@ class OptimizerGUI:
         
         if self.last_suggestion:
             print("Auto-Optimization: Appending suggestion to sheet and updating EPICS...")
-            # auto=True bypasses the user confirmation dialog for EPICS updates.
             self.append_to_sheet(auto=True)
         else:
             print("Auto-Optimization: No new suggestion was generated, skipping append.")
@@ -337,9 +385,9 @@ class OptimizerGUI:
         self.autoupload_status_var.set("Status: Stopped by user.")
 
     def _monitor_analysis_folder(self):
-        folder_path = self.analysis_folder_var.get()
+        folder_path = self._resolve_path(self.analysis_folder_var.get())
         file_pattern = self.file_pattern_var.get()
-        user_func_file = self.output_extraction_func_var.get()
+        user_func_file = self._resolve_path(self.output_extraction_func_var.get())
         shot_col_name = self.shot_num_col_var.get()
 
         if not os.path.isdir(folder_path):
@@ -367,12 +415,11 @@ class OptimizerGUI:
             return
 
         seen_files = set(glob.glob(os.path.join(folder_path, file_pattern)))
-        
-        worksheet = None # Lazy load the worksheet
+        worksheet = None  # Lazy load the worksheet
 
         while not self.stop_autoupload_event.is_set():
             try:
-                time.sleep(2) # Check every 2 seconds
+                time.sleep(2)  # Check every 2 seconds
                 current_files = set(glob.glob(os.path.join(folder_path, file_pattern)))
                 new_files = sorted(list(current_files - seen_files), key=os.path.getmtime)
 
@@ -388,7 +435,6 @@ class OptimizerGUI:
                     for file_path in new_files:
                         self.autoupload_status_var.set(f"Status: Processing {os.path.basename(file_path)}...")
                         
-                        # Add a delay and retry to handle file writing locks
                         results = None
                         for _ in range(3):
                             try:
@@ -403,7 +449,13 @@ class OptimizerGUI:
                             aff.update_sheet_with_analysis(worksheet, shot_col_name, shot_num, results)
                             self.autoupload_status_var.set(f"Status: Uploaded results for shot {shot_num}.")
 
-                            # --- NEW: Trigger auto-optimization ---
+                            # --- Execute Post-Recording Function ---
+                            post_rec_file = self.post_recording_func_var.get()
+                            if post_rec_file:
+                                self.autoupload_status_var.set(f"Status: Executing post-recording function for shot {shot_num}...")
+                                self._execute_user_function(post_rec_file, "run_post_recording", auto_mode=True)
+
+                            # --- Trigger auto-optimization ---
                             if self.auto_optimize_var.get():
                                 self.autoupload_status_var.set(f"Status: Shot {shot_num} uploaded. Triggering next optimization cycle.")
                                 self.root.after(0, self._run_and_append_safely)
@@ -414,7 +466,7 @@ class OptimizerGUI:
 
             except Exception as e:
                 self.autoupload_status_var.set(f"Status: Error in monitoring loop: {e}")
-                time.sleep(5) # Wait longer after an error
+                time.sleep(5)
         
         self.autoupload_status_var.set("Status: Idle")
 
@@ -434,7 +486,6 @@ class OptimizerGUI:
 
     def _parse_config_str(self, config_str):
         # Parses a string like 'x1: (10, 12), x2: (0, 5)' into names and bounds
-        import re
         pattern = r'["\']?([a-zA-Z0-9_.-]+)["\']?\s*:\s*\(\s*([-\d.eE]+)\s*,\s*([-\d.eE]+)\s*\)'
         matches = re.findall(pattern, config_str)
         names = []
@@ -458,8 +509,8 @@ class OptimizerGUI:
             if self.client is None:
                 self.gsheet_status_var.set("Status: Connecting to Google Sheets...")
                 self.root.update_idletasks()
-                cred_path = self.cred_path_var.get()
-                token_path = self.token_path_var.get()
+                cred_path = self._resolve_path(self.cred_path_var.get())
+                token_path = self._resolve_path(self.token_path_var.get())
                 self.client = aff.authorize_gspread(cred_path, token_path)
 
             url = self.url_var.get()
@@ -470,13 +521,13 @@ class OptimizerGUI:
         except Exception as e:
             messagebox.showerror("Google Sheets Error", f"Failed to connect to worksheet: {e}")
             if hasattr(gspread, 'exceptions') and isinstance(e, gspread.exceptions.GSpreadException):
-                self.client = None  # Reset client on GSpread error
+                self.client = None
                 self.worksheet = None
             return None
 
     def reconnect_gsheet(self):
-        self.client = None # Force re-auth
-        self.worksheet = None # Clear cached worksheet
+        self.client = None
+        self.worksheet = None
         ws = self._get_worksheet()
         if ws is not None:
             self.gsheet_status_var.set("Status: Connected to Google Sheets successfully!")
@@ -491,124 +542,125 @@ class OptimizerGUI:
         try:
             # --- Call Prerequisite Function ---
             prereq_file = self.prerequisite_func_var.get()
-            if prereq_file and os.path.isfile(prereq_file):
+            if prereq_file:
                 if not self._execute_user_function(prereq_file, "run_prerequisites", auto_mode=auto):
-                    return # Stop if prerequisite function fails
+                    return  # Stop if prerequisite function fails
 
-            # --- New EPICS Update Logic ---
-            epics_updates = {}
-            try:
-                with open(self.params_file, 'r') as f:
-                    optimizer_params = json.load(f)
-
-                for key, value in self.last_suggestion.items():
-                    if key in optimizer_params:
-                        epics_pv = optimizer_params[key]
-                        epics_updates[epics_pv] = value
-            except FileNotFoundError as e:
-                messagebox.showerror("JSON Error", f"Could not find optimizer_params.json: {e.filename}")
-                return
-            except json.JSONDecodeError as e:
-                messagebox.showerror("JSON Error", f"Error decoding JSON file: {e}")
-                return
-
-            if epics_updates:
-                if not auto: # Manual mode, ask for confirmation
-                    update_message = "The following EPICS PVs will be updated:\n\n"
-                    for pv, val in epics_updates.items():
-                        update_message += f"{pv}  ->  {val:.4f}\n"
-                    update_message += "\nDo you want to proceed?"
-                    if not messagebox.askyesno("Confirm EPICS Update", update_message):
-                        messagebox.showinfo("Cancelled", "EPICS update cancelled. Nothing was changed.")
-                        return # Stop if user cancels
-
-                # Proceed with update (either auto mode, or manual mode confirmed)
+            # --- EPICS Update Logic ---
+            if self.update_epics_var.get():
+                epics_updates = {}
                 try:
-                    for pv, val in epics_updates.items():
-                        signal = EpicsSignal(pv, name=pv)
-                        signal.wait_for_connection(timeout=2.0)
-                        signal.put(val)
-                    
-                    if not auto:
-                        messagebox.showinfo("EPICS Update", "Successfully updated EPICS PVs.")
-                    else:
-                        print("Auto-Optimization: Successfully updated EPICS PVs.")
-                        self.autoupload_status_var.set("Status: EPICS PVs updated. Waiting for next file.")
+                    optimizer_params_path = self._resolve_path(self.params_file)
+                    with open(optimizer_params_path, 'r') as f:
+                        optimizer_params = json.load(f)
 
-                except TimeoutError as e:
-                    error_msg = f"Connection timed out for a PV: {e}"
-                    if not auto:
-                        messagebox.showerror("EPICS Error", error_msg)
-                    else:
-                        print(f"Auto-Optimization ERROR: {error_msg}")
-                        self.autoupload_status_var.set(f"Status: EPICS Error - {error_msg}")
-                    return
-                except Exception as e:
-                    error_msg = f"Failed to update EPICS PVs: {e}"
-                    if not auto:
-                        messagebox.showerror("EPICS Error", error_msg)
-                    else:
-                        print(f"Auto-Optimization ERROR: {error_msg}")
-                        self.autoupload_status_var.set(f"Status: EPICS Error - {error_msg}")
-                    return
-
-            # --- Existing Google Sheet Logic ---
-            worksheet = self._get_worksheet()
-            if worksheet is None:
-                return  # Error already shown by helper
-            
-            headers = worksheet.row_values(1)
-            if not headers:
-                headers = list(self.last_suggestion.keys())
-                worksheet.append_row(headers)
-                
-            new_row_dict = {header: "" for header in headers}
-            for key, value in self.last_suggestion.items():
-                if key in new_row_dict:
-                    new_row_dict[key] = value
-            
-            if self.shot_num_col_var.get() in new_row_dict and new_row_dict[self.shot_num_col_var.get()] == "":
-                # Auto-assign next shot number
-                existing_shots = worksheet.col_values(headers.index(self.shot_num_col_var.get()) + 1)[1:]
-                existing_shots_numeric = [int(s) for s in existing_shots if s.isdigit()]
-                next_shot_num = max(existing_shots_numeric, default=0) + 1
-                new_row_dict[self.shot_num_col_var.get()] = next_shot_num
-
-            # --- Check if the last row in the sheet is a pending row (missing actions) ---
-            last_row_index = len(worksheet.col_values(1))
-            if last_row_index > 1:
-                last_row_values = worksheet.row_values(last_row_index)
-                last_row_dict = {h: v for h, v in zip(headers, last_row_values + [""] * (len(headers) - len(last_row_values)))}
-                
-                # If any suggested action is missing in the last row, it's a pending row
-                actions_missing = any(last_row_dict.get(key, "") == "" for key in self.last_suggestion.keys())
-                
-                if actions_missing:
-                    # Update the pending row instead of appending
-                    cells_to_update = []
                     for key, value in self.last_suggestion.items():
-                        if key in headers:
-                            col_idx = headers.index(key) + 1
-                            cells_to_update.append(gspread.Cell(row=last_row_index, col=col_idx, value=value))
-                    
-                    if cells_to_update:
-                        worksheet.update_cells(cells_to_update)
-                    
-                    shot_str = last_row_dict.get(self.shot_num_col_var.get(), 'unknown')
-                    if not auto:
-                        messagebox.showinfo("Success", f"Successfully updated pending Shot #{shot_str} with the suggestion.")
-                    else:
-                        print(f"Auto-Optimization: Updated pending row for shot #{shot_str}.")
+                        if key in optimizer_params:
+                            epics_pv = optimizer_params[key]
+                            epics_updates[epics_pv] = value
+                except FileNotFoundError:
+                    messagebox.showerror("JSON Error", f"Could not find optimizer_params.json at: {optimizer_params_path}")
+                    return
+                except json.JSONDecodeError as e:
+                    messagebox.showerror("JSON Error", f"Error decoding JSON file: {e}")
                     return
 
-            # If not a pending row, append a new row
-            values_to_append = [new_row_dict.get(h, "") for h in headers]
-            worksheet.append_row(values_to_append, value_input_option='USER_ENTERED')
+                if epics_updates:
+                    if not auto:  # Manual mode, ask for confirmation
+                        update_message = "The following EPICS PVs will be updated:\n\n"
+                        for pv, val in epics_updates.items():
+                            update_message += f"{pv}  ->  {val:.4f}\n"
+                        update_message += "\nDo you want to proceed?"
+                        if not messagebox.askyesno("Confirm EPICS Update", update_message):
+                            messagebox.showinfo("Cancelled", "EPICS update cancelled. Nothing was changed.")
+                            return  # Stop if user cancels
 
-            if not auto:
-                messagebox.showinfo("Success", "Successfully appended the suggestion to the sheet.")
-            else:
-                print(f"Auto-Optimization: Appended new parameters to sheet for shot #{new_row_dict[self.shot_num_col_var.get()]}.")
+                    # Proceed with update (either auto mode, or manual mode confirmed)
+                    try:
+                        for pv, val in epics_updates.items():
+                            signal = EpicsSignal(pv, name=pv)
+                            signal.wait_for_connection(timeout=2.0)
+                            signal.put(val)
+                        
+                        if not auto:
+                            messagebox.showinfo("EPICS Update", "Successfully updated EPICS PVs.")
+                        else:
+                            print("Auto-Optimization: Successfully updated EPICS PVs.")
+                            self.autoupload_status_var.set("Status: EPICS PVs updated. Waiting for next file.")
+
+                    except TimeoutError as e:
+                        error_msg = f"Connection timed out for a PV: {e}"
+                        if not auto:
+                            messagebox.showerror("EPICS Error", error_msg)
+                        else:
+                            print(f"Auto-Optimization ERROR: {error_msg}")
+                            self.autoupload_status_var.set(f"Status: EPICS Error - {error_msg}")
+                        return
+                    except Exception as e:
+                        error_msg = f"Failed to update EPICS PVs: {e}"
+                        if not auto:
+                            messagebox.showerror("EPICS Error", error_msg)
+                        else:
+                            print(f"Auto-Optimization ERROR: {error_msg}")
+                            self.autoupload_status_var.set(f"Status: EPICS Error - {error_msg}")
+                        return
+
+            # --- Google Sheet Logic ---
+            if self.append_to_sheet_var.get():
+                worksheet = self._get_worksheet()
+                if worksheet is None:
+                    return  # Error already shown by helper
+                
+                headers = worksheet.row_values(1)
+                if not headers:
+                    headers = list(self.last_suggestion.keys())
+                    worksheet.append_row(headers)
+                    
+                new_row_dict = {header: "" for header in headers}
+                for key, value in self.last_suggestion.items():
+                    if key in new_row_dict:
+                        new_row_dict[key] = value
+                
+                if self.shot_num_col_var.get() in new_row_dict and new_row_dict[self.shot_num_col_var.get()] == "":
+                    # Auto-assign next shot number
+                    existing_shots = worksheet.col_values(headers.index(self.shot_num_col_var.get()) + 1)[1:]
+                    existing_shots_numeric = [int(s) for s in existing_shots if s.isdigit()]
+                    next_shot_num = max(existing_shots_numeric, default=0) + 1
+                    new_row_dict[self.shot_num_col_var.get()] = next_shot_num
+
+                # --- Check if the last row in the sheet is a pending row (missing actions) ---
+                last_row_index = len(worksheet.col_values(1))
+                if last_row_index > 1:
+                    last_row_values = worksheet.row_values(last_row_index)
+                    last_row_dict = {h: v for h, v in zip(headers, last_row_values + [""] * (len(headers) - len(last_row_values)))}
+                    
+                    actions_missing = any(last_row_dict.get(key, "") == "" for key in self.last_suggestion.keys())
+                    
+                    if actions_missing:
+                        cells_to_update = []
+                        for key, value in self.last_suggestion.items():
+                            if key in headers:
+                                col_idx = headers.index(key) + 1
+                                cells_to_update.append(gspread.Cell(row=last_row_index, col=col_idx, value=value))
+                        
+                        if cells_to_update:
+                            worksheet.update_cells(cells_to_update)
+                        
+                        shot_str = last_row_dict.get(self.shot_num_col_var.get(), 'unknown')
+                        if not auto:
+                            messagebox.showinfo("Success", f"Successfully updated pending Shot #{shot_str} with the suggestion.")
+                        else:
+                            print(f"Auto-Optimization: Updated pending row for shot #{shot_str}.")
+                        return
+
+                # If not a pending row, append a new row
+                values_to_append = [new_row_dict.get(h, "") for h in headers]
+                worksheet.append_row(values_to_append, value_input_option='USER_ENTERED')
+
+                if not auto:
+                    messagebox.showinfo("Success", "Successfully appended the suggestion to the sheet.")
+                else:
+                    print(f"Auto-Optimization: Appended new parameters to sheet for shot #{new_row_dict[self.shot_num_col_var.get()]}.")
 
         except Exception as e:
             messagebox.showerror("Append Error", f"An error occurred while appending: {e}")
@@ -640,7 +692,7 @@ class OptimizerGUI:
 
             worksheet = self._get_worksheet()
             if worksheet is None:
-                return # Error already shown by helper
+                return  # Error already shown by helper
 
             # --- 2. Process Data ---
             self.suggestion_var.set("Processing data...")
@@ -679,19 +731,16 @@ class OptimizerGUI:
             sheet_headers = worksheet.row_values(1)
             obj_col_index = -1
             try:
-                obj_col_index = sheet_headers.index(obj_name) + 1 # 1-based index
+                obj_col_index = sheet_headers.index(obj_name) + 1  # 1-based index
             except ValueError:
-                # If objective column doesn't exist, add it to headers
                 worksheet.append_row([obj_name])
-                sheet_headers = worksheet.row_values(1) # Re-read headers
+                sheet_headers = worksheet.row_values(1)
                 obj_col_index = sheet_headers.index(obj_name) + 1
 
             cells_to_update = []
-            # Iterate through the DataFrame and prepare cells for update
-            # df.index is 0-based, sheet rows are 1-based, plus 1 for header row
             for df_idx, obj_value in df[obj_name].items():
-                if pd.notna(obj_value): # Only update if objective is not NaN
-                    sheet_row = df_idx + 2 # +1 for 1-based, +1 for header
+                if pd.notna(obj_value):
+                    sheet_row = df_idx + 2  # +1 for 1-based, +1 for header
                     cells_to_update.append(gspread.Cell(row=sheet_row, col=obj_col_index, value=str(obj_value)))
             
             if cells_to_update:
@@ -743,6 +792,7 @@ class OptimizerGUI:
             self.suggestion_var.set("An error occurred.")
             self.best_var.set("")
             messagebox.showerror("Error", str(e))
+
 
 if __name__ == "__main__":
     root = tk.Tk()

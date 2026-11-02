@@ -5,12 +5,18 @@ pandas
 matplotlib
 
 # Bayesian Optimization Core
+torch
 botorch
 gpytorch
 
 # EPICS Control
 ophyd
 caproto
+
+# Google Sheets Integration
+gspread
+google-auth
+google-auth-oauthlib
 
 # Image Processing (ImageMonitor)
 pillow

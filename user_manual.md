@@ -36,33 +36,39 @@ This manual explains how to use the GUIs that manage this process.
 
 ## Part 1: The Image Monitor (`ImageMonitor.py`)
 
-**Purpose:** To view live images from the experiment and, most importantly, to define the **Region of Interest (ROI)** and **Zero Point** for the Thomson Parabola analysis.
+**Purpose:** To view live images from the experiment and, most importantly, to define the **Region of Interest (ROI)**, **Background ROI**, and **Zero Point** for the Thomson Parabola analysis.
 
 ### Setting Up the Monitor
 
 1.  **Open the Monitor:** Launch the `OptimizerGUI` and click the **"Open Image Monitor"** button.
 2.  **Select Source:**
     -   To watch a folder for new images, click **"Select Folder..."** and choose the directory where your camera saves images.
-    -   To view a single, static image, click **"Select File..."**.
+    -   To view static image(s), click **"Load File(s)..."** (or **"Select File..."**).
 3.  **Start Monitoring:** If you selected a folder, click the **"Start Monitoring"** button. The latest image will appear in the window.
 4.  **Background Subtraction (Optional):**
-    -   Click **"Select BG"** to choose a background image.
+    -   Click **"Select BG"** to choose a reference background image.
     -   This background will be subtracted from all subsequent images.
-    -   Adjust the **"BG Factor"** if your background needs to be scaled (e.g., if it was taken with a different exposure time).
+    -   **Static Scaling:** Adjust the **"BG Factor"** if your background needs a fixed multiplier (e.g., if it was taken with a different exposure time).
+    -   **Dynamic Background Subtraction:**
+        -   In `OptimizerGUI`, click the **"Settings"** button and check **"Dynamic Background Subtraction"**.
+        -   In `ImageMonitor`, define a **Background ROI (blue dashed box)** in Edit Mode using **`Shift + Left-Click Drag`** (see next section).
+        -   When enabled, for each incoming image, the monitor calculates the mean intensity inside the Background ROI for both the raw image and the reference background image, then dynamically scales the entire reference background image (`total_scaling_factor = avg_signal_in_bbox / avg_bg_in_bbox`) before subtraction so that the background level within the blue ROI is zeroed out shot-to-shot.
 
 ### Defining the Analysis Region (Crucial Step)
 
-This is the most important function of the Image Monitor. The ROI and Zero Point you define here are used by the `TPAnalyzer`.
+This is the most important function of the Image Monitor. The ROI, Background ROI, and Zero Point you define here are used by the `ImageMonitor` and `TPAnalyzer`.
 
 1.  **Enter Edit Mode:** With an image displayed, press **`Ctrl+E`** on your keyboard. The window title will change to "EDIT MODE".
 2.  **Set the Zero Point:**
     -   The "Zero Point" is the undeflected spot on your detector (i.e., where particles would go if there were no fields).
     -   **Left-click** directly on this spot in the image. A red cross `+` will appear.
-3.  **Set the Region of Interest (ROI):**
+3.  **Set the Signal Region of Interest (ROI):**
     -   The ROI is the rectangular area where your signal trace appears.
-    -   **Click and drag** your mouse to draw a box around the entire Thomson parabola trace. A red rectangle will appear.
-4.  **Exit Edit Mode:** Press **`Ctrl+E`** again to exit edit mode.
-5.  **Done:** The Zero Point and ROI are now saved and can be accessed by the `TPAnalyzer`. You only need to do this once per experimental session, unless your alignment changes.
+    -   **Click and drag** your mouse to draw a box around the entire Thomson parabola trace. A **red solid rectangle** (`roi_bbox`) will appear.
+4.  **Set the Background ROI (for Dynamic Background Subtraction):**
+    -   Hold **`Shift` + Left-click and drag** your mouse to draw a box over a signal-free background region on the detector. A **blue dashed rectangle** (`bg_bbox`) will appear.
+5.  **Exit Edit Mode:** Press **`Ctrl+E`** again to exit edit mode.
+6.  **Done:** The Zero Point, Signal ROI, and Background ROI are now saved to `monitor_state.json` and can be accessed by the `TPAnalyzer`. You only need to do this once per experimental session, unless your alignment changes.
 
 ---
 
@@ -140,7 +146,7 @@ Use this for continuous, unattended data processing.
     -   Fetch the latest data (including Actions, Contexts, and Objectives) from Google Sheets.
     -   Run the optimizer (standard or environment-aware).
     -   Display the **"Next Suggested Params"** and the **"Current Best"** found so far.
-3.  **Apply and Record:**
+4.  **Apply and Record:**
     -   Click **"Append Suggestion to Sheet"**. A confirmation box will appear, showing you which EPICS PVs will be updated.
     -   If you confirm, the script will:
         1.  Update the EPICS PVs on the machine with the new suggested values.
