@@ -256,13 +256,19 @@ class MonitorWindow:
         ttk.Entry(controls_frame, textvariable=self.bg_factor_var, width=5).grid(row=0, column=5, sticky=tk.W)
 
         # Autosave Controls
-        ttk.Label(controls_frame, text="Save Prefix:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
+        ttk.Label(controls_frame, text="Save Folder:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
+        self.save_folder_var = tk.StringVar()
+        ttk.Entry(controls_frame, textvariable=self.save_folder_var, width=60).grid(row=1, column=1, sticky=(tk.W, tk.E))
+        browse_save_button = ttk.Button(controls_frame, text="Browse...", command=self._browse_save_folder)
+        browse_save_button.grid(row=1, column=2, padx=5)
+
+        ttk.Label(controls_frame, text="Save Prefix:").grid(row=1, column=3, sticky=tk.W, padx=5, pady=5)
         self.save_prefix_var = tk.StringVar()
-        ttk.Entry(controls_frame, textvariable=self.save_prefix_var, width=20).grid(row=1, column=1, sticky=tk.W)
+        ttk.Entry(controls_frame, textvariable=self.save_prefix_var, width=12).grid(row=1, column=4, sticky=tk.W)
         
         self.autosave_var = tk.BooleanVar()
         autosave_check = ttk.Checkbutton(controls_frame, text="Autosave Image", variable=self.autosave_var)
-        autosave_check.grid(row=1, column=2, padx=10)
+        autosave_check.grid(row=1, column=5, padx=10)
 
         controls_frame.columnconfigure(1, weight=1)
 
@@ -309,6 +315,11 @@ class MonitorWindow:
             self.path_var.set(folder_selected)
             self.start_button.config(state=tk.NORMAL)
             self.stop_button.config(state=tk.DISABLED)
+
+    def _browse_save_folder(self):
+        folder_selected = filedialog.askdirectory()
+        if folder_selected:
+            self.save_folder_var.set(folder_selected)
 
     def _browse_batch_files(self):
         files = filedialog.askopenfilenames(
@@ -434,7 +445,7 @@ class MonitorWindow:
                         except Exception as e:
                             print(f"Error opening image {file_path}: {e}")
                 
-                self.seen_files = current_files
+                self.seen_files.update(current_files)
                 time.sleep(sleep_time)
 
             except Exception as e:
@@ -462,32 +473,47 @@ class MonitorWindow:
         if not prefix:
             prefix = "sbg_"  # Default prefix if none is provided in GUI
 
-        # Determine the save directory
+        # Determine the raw source directory
         source_path_from_ui = self._resolve_path(self.path_var.get())
+        raw_dir = None
+        if source_path_from_ui and os.path.isdir(source_path_from_ui):
+            raw_dir = os.path.normpath(source_path_from_ui)
+        elif original_path and os.path.isfile(original_path):
+            raw_dir = os.path.normpath(os.path.dirname(original_path))
+
+        # Determine the save directory
+        custom_save_folder = self.save_folder_var.get().strip()
         save_dir = None
 
-        # Case 1: We are in folder-monitoring mode. Create the 'optapp_' subfolder.
-        if os.path.isdir(source_path_from_ui):
-            parent_dir = os.path.dirname(source_path_from_ui)
-            monitor_basename = os.path.basename(source_path_from_ui)
-            save_folder_name = f"optapp_{monitor_basename}"
-            save_dir = os.path.join(parent_dir, save_folder_name)
-        
-        # Case 2: A batch of files was loaded. Save alongside the original file.
-        elif original_path and os.path.isfile(original_path):
-            save_dir = os.path.dirname(original_path)
-        
+        if custom_save_folder:
+            if os.path.isabs(custom_save_folder):
+                save_dir = os.path.normpath(custom_save_folder)
+            elif raw_dir:
+                save_dir = os.path.normpath(os.path.join(raw_dir, custom_save_folder))
+            else:
+                save_dir = self._resolve_path(custom_save_folder)
+        elif raw_dir:
+            # Default: create 'subs_{folder_name}' inside the raw folder so folder monitoring ignores it
+            raw_folder_name = os.path.basename(raw_dir)
+            save_dir = os.path.join(raw_dir, f"subs_{raw_folder_name}")
+
         # Fallback if no valid directory could be determined
         if not save_dir:
             print("Cannot determine a valid save directory. Image will not be saved.")
             return
 
+        save_path = None
         try:
             os.makedirs(save_dir, exist_ok=True)
             
             base_name = os.path.basename(original_path)
             new_filename = f"{prefix}{base_name}"
             save_path = os.path.join(save_dir, new_filename)
+
+            # Register save_path in seen_files before writing to prevent re-triggering if save_dir == raw_dir
+            if hasattr(self, 'seen_files') and isinstance(self.seen_files, set):
+                self.seen_files.add(save_path)
+                self.seen_files.add(os.path.normpath(save_path))
 
             img_to_save = Image.fromarray(img_array)
             img_to_save.save(save_path)
@@ -598,6 +624,7 @@ class MonitorWindow:
             "folder_path": "",
             "sleep_time": "2",
             "background_path": "",
+            "save_folder": "",
             "save_prefix": "",
             "autosave": False,
             "vmin": "",
@@ -620,6 +647,7 @@ class MonitorWindow:
         self.path_var.set(state.get("folder_path", default_state["folder_path"]))
         self.sleep_var.set(state.get("sleep_time", default_state["sleep_time"]))
         self.background_path_var.set(state.get("background_path", default_state["background_path"]))
+        self.save_folder_var.set(state.get("save_folder", default_state["save_folder"]))
         self.save_prefix_var.set(state.get("save_prefix", default_state["save_prefix"]))
         self.autosave_var.set(state.get("autosave", default_state["autosave"]))
         self.vmin_var.set(state.get("vmin", default_state["vmin"]))
@@ -643,6 +671,7 @@ class MonitorWindow:
             "folder_path": self.path_var.get(),
             "sleep_time": self.sleep_var.get(),
             "background_path": self.background_path_var.get(),
+            "save_folder": self.save_folder_var.get(),
             "save_prefix": self.save_prefix_var.get(),
             "autosave": self.autosave_var.get(),
             "vmin": self.vmin_var.get(),

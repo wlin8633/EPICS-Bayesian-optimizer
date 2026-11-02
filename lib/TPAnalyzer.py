@@ -66,15 +66,18 @@ def plot_spectrum(energy_bins, spectrum):
     plt.show()
 
 
-def save_spectrum(filename, energy_bins, spectrum, std_spectrum=None):
-    """Saves the energy spectrum to a text file."""
-    if std_spectrum is not None:
-        header = "Energy (MeV), Mean_Counts, STD_Counts"
+def save_spectrum(filename, energy_bins, spectrum, std_spectrum=None, distance_axis=None):
+    """Saves the energy spectrum to a CSV file."""
+    if distance_axis is not None and std_spectrum is not None:
+        header = "Energy (MeV),Distance (m),Mean_Counts,STD_Counts"
+        data = np.c_[energy_bins, distance_axis, spectrum, std_spectrum]
+    elif std_spectrum is not None:
+        header = "Energy (MeV),Mean_Counts,STD_Counts"
         data = np.c_[energy_bins, spectrum, std_spectrum]
     else:
-        header = "Energy (MeV), Counts"
+        header = "Energy (MeV),Counts"
         data = np.c_[energy_bins, spectrum]
-    np.savetxt(filename, data, header=header, delimiter=',')
+    np.savetxt(filename, data, header=header, delimiter=',', comments='')
 
 
 class TPAnalyzerWindow:
@@ -177,7 +180,15 @@ class TPAnalyzerWindow:
 
         self.save_spectrum_var = tk.BooleanVar(value=True)
         save_check = ttk.Checkbutton(save_frame, text="Save Analysis Data", variable=self.save_spectrum_var)
-        save_check.grid(row=0, column=0, columnspan=2, sticky=tk.W, padx=5)
+        save_check.grid(row=0, column=0, sticky=tk.W, padx=5)
+
+        format_frame = ttk.Frame(save_frame)
+        format_frame.grid(row=0, column=1, sticky=tk.W, padx=5)
+        ttk.Label(format_frame, text="Format:").pack(side=tk.LEFT, padx=(0, 5))
+        self.save_format_var = tk.StringVar(value=".npz")
+        ttk.Radiobutton(format_frame, text=".npz", variable=self.save_format_var, value=".npz").pack(side=tk.LEFT, padx=2)
+        ttk.Radiobutton(format_frame, text=".csv", variable=self.save_format_var, value=".csv").pack(side=tk.LEFT, padx=2)
+        ttk.Radiobutton(format_frame, text="Both", variable=self.save_format_var, value="both").pack(side=tk.LEFT, padx=2)
 
         ttk.Label(save_frame, text="Save Prefix:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
         self.save_prefix_var = tk.StringVar()
@@ -665,23 +676,32 @@ class TPAnalyzerWindow:
                 else:
                     final_prefix = base_filename
 
-                filename = f"{final_prefix}_tp_analysis.npz"
-                npz_path = os.path.join(save_folder, filename)
-
+                save_format = self.save_format_var.get()
+                saved_paths = []
                 config["savFolderPath"] = save_folder
 
-                np.savez(npz_path, 
-                         config=config,
-                         shot_number=shot_number,
-                         avg_image=self.last_mean_img,
-                         std_image=self.last_std_img,
-                         energy_axis=es_x, 
-                         distance_axis=es_dis,
-                         mean_spectrum=smoothed_mean_spectrum,
-                         std_spectrum=smoothed_std_spectrum)
+                if save_format in (".npz", "both"):
+                    npz_filename = f"{final_prefix}_tp_analysis.npz"
+                    npz_path = os.path.join(save_folder, npz_filename)
+                    np.savez(npz_path, 
+                             config=config,
+                             shot_number=shot_number,
+                             avg_image=self.last_mean_img,
+                             std_image=self.last_std_img,
+                             energy_axis=es_x, 
+                             distance_axis=es_dis,
+                             mean_spectrum=smoothed_mean_spectrum,
+                             std_spectrum=smoothed_std_spectrum)
+                    saved_paths.append(npz_path)
+
+                if save_format in (".csv", "both"):
+                    csv_filename = f"{final_prefix}_tp_analysis.csv"
+                    csv_path = os.path.join(save_folder, csv_filename)
+                    save_spectrum(csv_path, es_x, smoothed_mean_spectrum, smoothed_std_spectrum, distance_axis=es_dis)
+                    saved_paths.append(csv_path)
                 
-                if not is_batch_mode:
-                    self.status_var.set(f"Analysis finished. Results saved to {npz_path}")
+                if not is_batch_mode and saved_paths:
+                    self.status_var.set(f"Analysis finished. Results saved to {', '.join(saved_paths)}")
                     
             elif not is_batch_mode:
                 self.status_var.set("Thomson Parabola analysis finished.")
@@ -750,6 +770,7 @@ class TPAnalyzerWindow:
             "accum_num": "10",
             "params": default_params,
             "save_spectrum": True,
+            "save_format": ".npz",
             "save_path": "",
             "save_prefix": "",
             "auto_analysis": False
@@ -773,6 +794,7 @@ class TPAnalyzerWindow:
             var.set(params_to_load.get(name, default_params.get(name, "")))
         
         self.save_spectrum_var.set(state.get("save_spectrum", default_state["save_spectrum"]))
+        self.save_format_var.set(state.get("save_format", default_state["save_format"]))
         self.save_path_var.set(state.get("save_path", default_state["save_path"]))
         self.save_prefix_var.set(state.get("save_prefix", default_state.get("save_prefix", "")))
 
@@ -782,6 +804,7 @@ class TPAnalyzerWindow:
             "accum_num": self.accum_num_var.get(),
             "params": {name: var.get() for name, var in self.param_vars.items()},
             "save_spectrum": self.save_spectrum_var.get(),
+            "save_format": self.save_format_var.get(),
             "save_path": self.save_path_var.get(),
             "save_prefix": self.save_prefix_var.get(),
             "auto_analysis": self.auto_analysis_var.get()

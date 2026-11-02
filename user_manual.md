@@ -53,6 +53,10 @@ This manual explains how to use the GUIs that manage this process.
         -   In `OptimizerGUI`, click the **"Settings"** button and check **"Dynamic Background Subtraction"**.
         -   In `ImageMonitor`, define a **Background ROI (blue dashed box)** in Edit Mode using **`Shift + Left-Click Drag`** (see next section).
         -   When enabled, for each incoming image, the monitor calculates the mean intensity inside the Background ROI for both the raw image and the reference background image, then dynamically scales the entire reference background image (`total_scaling_factor = avg_signal_in_bbox / avg_bg_in_bbox`) before subtraction so that the background level within the blue ROI is zeroed out shot-to-shot.
+5.  **Autosaving Background-Subtracted Images (Optional):**
+    -   Check **"Autosave Image"** to automatically save each processed (background-subtracted) image.
+    -   **Save Folder:** Specify an output directory (absolute path via **"Browse..."** or a subfolder name relative to the raw folder). If left blank, a subfolder named `subs_{folder_name}` is automatically created inside the raw image folder so that folder monitoring does not re-read and re-subtract saved images in a loop.
+    -   **Save Prefix:** Optional filename prefix (defaults to `sbg_`).
 
 ### Defining the Analysis Region (Crucial Step)
 
@@ -84,7 +88,8 @@ This is the most important function of the Image Monitor. The ROI, Background RO
 4.  **Analysis Parameters:** Fill in the physics parameters for your spectrometer (magnetic field `Bz`, drift distances `dB`, particle `Z` and `A`, etc.). These are critical for an accurate energy calculation.
 5.  **Save Options:**
     -   Ensure **"Save Analysis Data"** is checked.
-    -   Choose a **"Save Folder"** where the output `.npz` files will be stored. **This folder is what the `OptimizerGUI` will monitor in the final closed-loop setup.**
+    -   **Format:** Select **`.npz`** (default, required by `OptimizerGUI` for closed-loop BO), **`.csv`** (saves `Energy (MeV), Distance (m), Mean_Counts, STD_Counts` for external plotting/analysis), or **`Both`**.
+    -   Choose a **"Save Folder"** where the output `.npz` / `.csv` files will be stored. **This folder is what the `OptimizerGUI` will monitor in the final closed-loop setup.**
     -   Set a **"Save Prefix"** (e.g., `run1_`).
 
 ### Standard Workflow (Manual Analysis)
