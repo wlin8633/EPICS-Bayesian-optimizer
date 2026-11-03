@@ -22,7 +22,7 @@ For detailed instructions on setting up the ROIs, connecting to EPICS, and runni
 
 ## Quick Start
 ```bash
-# Ensure you are on Python 3.9
+# Ensure you are on Python 3.14
 pip install -r requirements.txt
 python main.py
 ```
