@@ -2,6 +2,8 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import warnings
+warnings.filterwarnings("ignore", message=".*torch\\.jit\\.script.*", category=FutureWarning)
 import torch
 from botorch.models import SingleTaskGP
 from botorch.fit import fit_gpytorch_mll
